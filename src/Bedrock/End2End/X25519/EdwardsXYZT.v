@@ -145,6 +145,15 @@ Definition copypoint := func! (op, p) {
   fe25519_copy(op+$160, p+$160)
 }.
 
+(* p points to a point and is copied over to p_out - should be nice to test the point struct*)
+Definition copypoint := func! (op, p) {
+  fe25519_copy(op, p);
+  fe25519_copy(op+$40, p+$40);
+  fe25519_copy(op+$80, p+$80);
+  fe25519_copy(op+$120, p+$120);
+  fe25519_copy(op+$160, p+$160)
+}.
+
 Section WithParameters.
   Context {two_lt_M: 2 < M_pos}.
   (* TODO: Can we provide actual values/proofs for these, rather than just sticking them in the context? *)
@@ -162,6 +171,7 @@ Local Notation FElem := (FElem(FieldRepresentation:=frep25519)).
 Local Notation bounded_by := (bounded_by(FieldRepresentation:=frep25519)).
 Local Notation word := (Naive.word 32).
 Local Notation felem := (felem(FieldRepresentation:=frep25519)).
+Local Notation point := (point(Feq:=Logic.eq)(Fzero:=F.zero)(Fadd:=F.add)(Fmul:=F.mul)(a:=a)(d:=d)).
 Local Notation point := (point(Feq:=Logic.eq)(Fzero:=F.zero)(Fadd:=F.add)(Fmul:=F.mul)(a:=a)(d:=d)).
 Local Notation cached := (cached(Fzero:=F.zero)(Fadd:=F.add)(Fmul:=F.mul)(a:=a)(d:=d)).
 Local Notation coordinates := (coordinates(Feq:=Logic.eq)).
@@ -215,11 +225,11 @@ Local Notation "xs $@ a" := (map.of_list_word_at a xs) (at level 10, format "xs 
 (* Ideally I think I would want to go from F M_pos to felem (i.e. list word)*)
 
 Instance spec_copypoint : spec_of "copypoint" :=
-  fnspec! "copypoint" (p_op p_p : word) / (op p : point),
+  fnspec! "copypoint" (p_op p_p : word) / (op p : point) R,
   { requires t m := 
-      m =* (op$@p_op) * (p$@p_p);
+      m =* (op$@p_op) * (p$@p_p) * R;
     ensures t' m' :=
-      m =* (p$@p_op) * (p$@p_p)}.
+      m =* (p$@p_op) * (p$@p_p) * R}.
 
 Global Instance spec_of_add_precomputed : spec_of "add_precomputed" :=
   fnspec! "add_precomputed"
@@ -334,6 +344,7 @@ Local Instance spec_of_fe25519_sub : spec_of "fe25519_sub" := Field.spec_of_BinO
 Local Instance spec_of_fe25519_carry_sub : spec_of "fe25519_carry_sub" := Field.spec_of_BinOp bin_carry_sub.
 Local Instance spec_of_fe25519_from_word : spec_of "fe25519_from_word" := Field.spec_of_from_word.
 Local Instance spec_of_fe26619_copy: spec_of "fe25519_copy" := Field.spec_of_felem_copy.
+Local Instance spec_of_fe26619_copy: spec_of "fe25519_copy" := Field.spec_of_felem_copy.
 
 Local Arguments word.rep : simpl never.
 Local Arguments word.wrap : simpl never.
@@ -425,7 +436,12 @@ Lemma copypoint_op : program_logic_goal_for_function! copypoint.
 Proof.
   repeat single_step. 
   destruct p as (((((x & y) & z) & ta) & tb) & p).
-  destruct op as (((((ox & oy) & oz) & ota) & otb) & op). cbv beta in * |-.
+  destruct op as (((((ox & oy) & oz) & ota) & otb) & op).
+  cbv [proj1_sig proj2_sig fst snd f_to_bytes p_to_bytes coordinates] in * |- .
+  pose proof ptsto_bytes.sep_eq_of_list_word_at_app.
+  seprewrite_in_by (ptsto_bytes.sep_eq_of_list_word_at_app) H4 auto.
+  cbv zeta in H4.
+  
   cbv [p_to_bytes] in H4.
   seprewrite_in_by ptsto_bytes.sep_eq_of_list_word_at_app H4
      ltac:(rewrite ?length_app, ?length_coord; trivial; try Lia.lia). 
