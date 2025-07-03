@@ -136,6 +136,15 @@ Definition readd := func! (ox, oy, oz, ota, otb, X1, Y1, Z1, Ta1, Tb1, half_YmX,
   fe25519_mul(oz, F, G)
 }.
 
+(* p points to a point and is copied over to p_out - should be nice to test the point struct*)
+Definition copypoint := func! (op, p) {
+  fe25519_copy(op, p);
+  fe25519_copy(op+$40, p+$40);
+  fe25519_copy(op+$80, p+$80);
+  fe25519_copy(op+$120, p+$120);
+  fe25519_copy(op+$160, p+$160)
+}.
+
 Section WithParameters.
   Context {two_lt_M: 2 < M_pos}.
   (* TODO: Can we provide actual values/proofs for these, rather than just sticking them in the context? *)
@@ -148,13 +157,12 @@ Section WithParameters.
   Context {a_eq_minus1:a = F.opp F.one} {twice_d} {k_eq_2d:twice_d = (F.add d d)} {nonzero_d: d<>F.zero}.
 
 Local Notation "m =* P" := ((P%sep) m) (at level 70, only parsing).
-Local Notation "xs $@ a" := (Array.array ptsto (word.of_Z 1) a xs) (at level 10, format "xs $@ a").
 
 Local Notation FElem := (FElem(FieldRepresentation:=frep25519)).
 Local Notation bounded_by := (bounded_by(FieldRepresentation:=frep25519)).
 Local Notation word := (Naive.word 32).
 Local Notation felem := (felem(FieldRepresentation:=frep25519)).
-Local Notation point := (point(Fzero:=F.zero)(Fadd:=F.add)(Fmul:=F.mul)(a:=a)(d:=d)).
+Local Notation point := (point(Feq:=Logic.eq)(Fzero:=F.zero)(Fadd:=F.add)(Fmul:=F.mul)(a:=a)(d:=d)).
 Local Notation cached := (cached(Fzero:=F.zero)(Fadd:=F.add)(Fmul:=F.mul)(a:=a)(d:=d)).
 Local Notation coordinates := (coordinates(Feq:=Logic.eq)).
 Local Notation m1double :=
@@ -190,6 +198,28 @@ Instance spec_of_fe25519_half : spec_of "fe25519_half" :=
         bounded_by tight_bounds result /\
         feval result = F.div (feval input) (F.add F.one F.one) /\
         m' =* (FElem result_location result)  * R}.
+(* takes forever to evaluate, but it's 40. *)
+(* Eval cbv -[F.to_Z] in (felem_size_in_bytes). *)
+(* Search (_ -> list byte). *)
+(* Print le_split. *)
+
+
+
+
+(* this is a very quick and dirty form of what I've seen in P256. *)
+Coercion f_to_bytes (x : F M_pos) : list byte := le_split 40 x. (* this looks bad. also, what's the uniform inheritance condition? *)
+Coercion p_to_bytes (p : point) : list byte := match (coordinates p) with | (x,y,z,ta,tb) =>
+    f_to_bytes x ++ f_to_bytes y ++ f_to_bytes z ++ f_to_bytes ta ++ f_to_bytes tb end.
+Local Notation "xs $@ a" := (map.of_list_word_at a xs) (at level 10, format "xs $@ a").
+(* Wouldn't it be much nicer to do this less low-level? *)
+(* Ideally I think I would want to go from F M_pos to felem (i.e. list word)*)
+
+Instance spec_copypoint : spec_of "copypoint" :=
+  fnspec! "copypoint" (p_op p_p : word) / (op p : point),
+  { requires t m := 
+      m =* (op$@p_op) * (p$@p_p);
+    ensures t' m' :=
+      m =* (p$@p_op) * (p$@p_p)}.
 
 Global Instance spec_of_add_precomputed : spec_of "add_precomputed" :=
   fnspec! "add_precomputed"
@@ -391,6 +421,16 @@ Proof.
     (* Without this, resolution of cbv stalls out Qed. *)
   Strategy -1000 [un_xbounds bin_xbounds bin_ybounds un_square bin_model cached_coordinates proj1_sig bin_mul bin_add bin_carry_add bin_sub un_outbounds bin_outbounds].
 Qed.
+Lemma copypoint_op : program_logic_goal_for_function! copypoint.
+Proof.
+  repeat single_step. 
+  destruct p as (((((x & y) & z) & ta) & tb) & p).
+  destruct op as (((((ox & oy) & oz) & ota) & otb) & op). cbv beta in * |-.
+  cbv [p_to_bytes] in H4.
+  seprewrite_in_by ptsto_bytes.sep_eq_of_list_word_at_app H4
+     ltac:(rewrite ?length_app, ?length_coord; trivial; try Lia.lia). 
+  ecancel_assumption.
+  repeat single_step.
 
 Lemma add_precomputed_ok : program_logic_goal_for_function! add_precomputed.
 Proof.
@@ -512,7 +552,7 @@ Proof.
   subst Ox Oy Oz Ota Otb.
   extract_ex1_and_emp_in H92.
   (* Now the hypothesis is in a format that straightline can solve. *)
-  repeat straightline.
+  repeat straightlin1e.
 
   (* Bounds *)
   exists x10, x11, x12, x6, x9.
