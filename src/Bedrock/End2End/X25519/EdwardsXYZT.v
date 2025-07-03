@@ -76,29 +76,41 @@ Definition add_precomputed := func! (ox, oy, oz, ota, otb, X1, Y1, Z1, Ta1, Tb1,
   fe25519_mul(oz, F, G)
 }.
 
+
+
 (* Equivalent of m1double in src/Curves/Edwards/XYZT/Basic.v *)
-(* Note: Ta/Tb are unused, but leaving in place in case we want to switch to a point struct in the future *)
-Definition double := func! (ox, oy, oz, ota, otb, X, Y, Z, Ta, Tb) {
+Definition double := func! (p_point_out, p_A) {
   stackalloc 40 as trX;
-  fe25519_square(trX, X);
+  fe25519_square(trX, p_A); (* TODO can we be more elegant here and somehow refer to x,y,z,ta,tb? *)
   stackalloc 40 as trZ;
-  fe25519_square(trZ, Y);
+  fe25519_square(trZ, p_A+$40);
   stackalloc 40 as t0;
-  fe25519_square(t0, Z);
+  fe25519_square(t0, p_A+$80);
   stackalloc 40 as trT;
   fe25519_carry_add(trT, t0, t0);
   stackalloc 40 as rY;
-  fe25519_add(rY, X, Y);
+  fe25519_add(rY, p_A, p_A+$40);
   fe25519_square(t0, rY);
-  fe25519_carry_add(otb, trZ, trX);
+  fe25519_carry_add(p_point_out+$160, trZ, trX);
   stackalloc 40 as cZ;
   fe25519_carry_sub(cZ, trZ, trX);
-  fe25519_sub(ota, t0, otb);
+  fe25519_sub(p_point_out+$120, t0, p_point_out+$160);
   stackalloc 40 as cT;
   fe25519_sub(cT, trT, cZ);
-  fe25519_mul(ox, ota, cT);
-  fe25519_mul(oy, otb, cZ);
-  fe25519_mul(oz, cZ, cT)
+  fe25519_mul(p_point_out, p_point_out+$120, cT);
+  fe25519_mul(p_point_out+$40, p_point_out+$160, cZ);
+  fe25519_mul(p_point_out+$80, cZ, cT)
+}.
+
+(* Converting a normal point to a cached point to prepare it for readdition. *)
+Definition to_cached := func! (ohalf_ymx, ohalf_ypx, oz, otd, x, y, z, ta, tb, d) {
+  fe25519_sub(ohalf_ymx, y, x);
+  fe25519_half(ohalf_ymx, ohalf_ymx); (* This doesn't exist yet, work with spec for now. *)
+  fe25519_add(ohalf_ypx, y, x);
+  fe25519_half(ohalf_ypx, ohalf_ypx);
+  fe25519_mul(otd, ta, tb);
+  fe25519_mul(otd, otd, d);
+  fe25519_copy(oz, z)
 }.
 
 (* Converting a normal point to a cached point to prepare it for readdition. *)
@@ -136,22 +148,51 @@ Definition readd := func! (ox, oy, oz, ota, otb, X1, Y1, Z1, Ta1, Tb1, half_YmX,
   fe25519_mul(oz, F, G)
 }.
 
-(* p points to a point and is copied over to p_out - should be nice to test the point struct*)
-Definition copypoint := func! (op, p) {
-  fe25519_copy(op, p);
-  fe25519_copy(op+$40, p+$40);
-  fe25519_copy(op+$80, p+$80);
-  fe25519_copy(op+$120, p+$120);
-  fe25519_copy(op+$160, p+$160)
+(* Copies a normal point, i.e. x y z ta tb. *)
+Definition copy_point := func! (p_out, p_in) {
+  fe25519_copy(p_out, p_in);
+  fe25519_copy(p_out+$40, p_in+$40);
+  fe25519_copy(p_out+$80, p_in+$80);
+  fe25519_copy(p_out+$120, p_in+$120);
+  fe25519_copy(p_out+$160, p_in+$160)
 }.
 
-(* p points to a point and is copied over to p_out - should be nice to test the point struct*)
-Definition copypoint := func! (op, p) {
-  fe25519_copy(op, p);
-  fe25519_copy(op+$40, p+$40);
-  fe25519_copy(op+$80, p+$80);
-  fe25519_copy(op+$120, p+$120);
-  fe25519_copy(op+$160, p+$160)
+(* Input is a normal point p, output is multiples of the input in cached format. *)
+Definition cached_multiples := func! (p_Ai, p_A) {
+  (* The first point is 0, which is (0, 1, 1, 0, 1) in normal coordinates, TODO generate the cached form directly. *)
+  stackalloc 200 as zero;
+  fe25519_from_bytes(zero, $0);
+  fe25519_from_bytes(zero+$40, $1);
+  fe25519_from_bytes(zero+$80, $1);
+  fe25519_from_bytes(zero+$120, $0);
+  fe25519_from_bytes(zero+$160, $1);
+  to_cached(p_Ai, p_Ai+$40, p_Ai+$80, p_Ai+$120, zero, zero+$40, zero+$80, zero+$120, zero+$140, zero+$160);
+  (* The second point is 1*A.*)
+  to_cached(p_Ai+$160, p_Ai+$160+$40, p_Ai+$160+$80, p_Ai+$160+$120, p_A, p_A+$40, p_A+$80, p_A+$120, p_A+$160);
+  (* Helper array of normal points for double and add results, contains multiples of A. *)
+  stackalloc 8*200 as p_Ai_uncached;
+  (* copy 1*A into the helper array at index 1 (+200). *)
+  copy_point(p_Ai_uncached+$200, p_A);
+  (* Loop to generate multiples. *)
+  i = $2;
+  stackalloc 200 as temp; (* Normal temp point - to store results of double and add. *)
+  while (i < $16) {
+    double(temp, p_Ai_uncached+((i >> $2) * $200)); (* Double (i/2)*A, now temp is i*A. *)
+    to_cached(p_Ai+(i*$160), p_Ai+(i*$160)+$40, p_Ai+(i*$160)+$80, p_Ai+(i*$160)+$120, temp, temp+$40, temp+$80, temp+$120, temp+$140, temp+$160); (* output at i is i*A. *)
+    if (i < $8) {
+      (* Save i*A for later, at index i. *)
+      copy_point(p_Ai_uncached+(i*$200), temp)
+    };
+    (* Now for the odd numbers, calculate (i+1)*A, store in temp. *)
+    readd(temp, temp+$40, temp+$80, temp+$120, temp+$140, temp+$160, p_A, p_A+$40, p_A+$80, p_A+$120, p_A+$160, p_Ai+(i*$160), p_Ai+(i*$160)+$40, p_Ai+(i*$160)+$80, p_Ai+(i*$160)+$120);
+    (* Store (i+1)*A in the result array. *)
+    to_cached(p_Ai+((i+$1)*$160), p_Ai+((i+$1)*$160)+$40, p_Ai+((i+$1)*$160)+$80, p_Ai+((i+$1)*$160)+$120, temp, temp+$40, temp+$80, temp+$120, temp+$140, temp+$160);
+    if (i < $7) {
+      (* Save (i+1)*A for later. *)
+      copy_point(p_Ai_uncached+((i+$1)*$200), temp)
+    };
+    i = i + $2
+  }
 }.
 
 Section WithParameters.
@@ -171,7 +212,6 @@ Local Notation FElem := (FElem(FieldRepresentation:=frep25519)).
 Local Notation bounded_by := (bounded_by(FieldRepresentation:=frep25519)).
 Local Notation word := (Naive.word 32).
 Local Notation felem := (felem(FieldRepresentation:=frep25519)).
-Local Notation point := (point(Feq:=Logic.eq)(Fzero:=F.zero)(Fadd:=F.add)(Fmul:=F.mul)(a:=a)(d:=d)).
 Local Notation point := (point(Feq:=Logic.eq)(Fzero:=F.zero)(Fadd:=F.add)(Fmul:=F.mul)(a:=a)(d:=d)).
 Local Notation cached := (cached(Fzero:=F.zero)(Fadd:=F.add)(Fmul:=F.mul)(a:=a)(d:=d)).
 Local Notation coordinates := (coordinates(Feq:=Logic.eq)).
@@ -229,7 +269,11 @@ Instance spec_copypoint : spec_of "copypoint" :=
   { requires t m := 
       m =* (op$@p_op) * (p$@p_p) * R;
     ensures t' m' :=
-      m =* (p$@p_op) * (p$@p_p) * R}.
+      t = t' /\
+      exists result,
+        bounded_by tight_bounds result /\
+        feval result = F.div (feval input) (F.add F.one F.one) /\
+        m' =* (FElem result_location result)  * R}.
 
 Global Instance spec_of_add_precomputed : spec_of "add_precomputed" :=
   fnspec! "add_precomputed"
@@ -256,6 +300,53 @@ Global Instance spec_of_add_precomputed : spec_of "add_precomputed" :=
         bounded_by loose_bounds otb' /\
         m' =* (FElem X1K X1) * (FElem Y1K Y1) * (FElem Z1K Z1) * (FElem Ta1K Ta1) * (FElem Tb1K Tb1) * (FElem half_ypxK half_ypx) * (FElem half_ymxK half_ymx) * (FElem xydK xyd) * (FElem oxK ox') * (FElem oyK oy') * (FElem ozK oz') * (FElem otaK ota') * (FElem otbK otb') * R }.
 
+Check bounded_by.
+(* TODO Notation or Definition? *)
+Notation coord_bounds := ((felem -> Prop) * (felem -> Prop) * (felem -> Prop) * (felem -> Prop) * (felem -> Prop))%type.
+Notation relaxed_coords := (felem * felem * felem * felem * felem)%type.
+
+Check feval.
+
+(* TODO check for how to simply map feval*)
+Definition feval_point (c : relaxed_coords) :=
+  let '(x, y, z, ta, tb) := c in  (feval x, feval y, feval z, feval ta, feval tb).
+
+(* TODO there should be a computationally elegant way to do this, by using function application with cross product *)
+(* TODO what does the ' in front of let do? I needed it for this to work. *)
+Definition coords_bounded_by (bounds : coord_bounds) c : Prop :=
+  let '(x,y,z,ta,tb) := c in
+  let '(bounds_x, bounds_y, bounds_z, bounds_ta, bounds_tb) := bounds in
+  bounds_x x /\ bounds_y y /\ bounds_z z /\ bounds_ta ta /\ bounds_tb tb.
+
+  Check coords_bounded_by.
+
+Definition double_bounds_in : coord_bounds := (bounded_by tight_bounds, bounded_by tight_bounds, bounded_by loose_bounds, bounded_by loose_bounds, bounded_by loose_bounds).
+
+Check FElem.
+
+Local Notation "$ n" := (match word.of_Z n return word with w => w end) (at level 9, format "$ n").
+Local Notation "p .+ n" := (word.add p (word.of_Z n)) (at level 50, format "p .+ n", left associativity).
+
+Local Notation "c $@ p" := (let '(x,y,z,ta,tb) := c in sep (sep (sep (sep (FElem p x) (FElem (p .+ 40) y)) (FElem (p .+ 80) z)) (FElem (p .+ 120) ta)) (FElem (p .+ 160) tb)) (at level 10, format "c $@ p").
+
+Global Instance spec_of_double : spec_of "double" :=
+  fnspec! "double"
+    (p_point_out p_A : word) /
+    (point : point) (point_relaxed anything: relaxed_coords) (R : _ -> Prop),
+  {
+    requires t m :=
+      coords_bounded_by (bounded_by tight_bounds, bounded_by tight_bounds, bounded_by loose_bounds, bounded_by loose_bounds, bounded_by loose_bounds) point_relaxed /\
+      feval_point point_relaxed = coordinates point /\
+      m =* anything $@ p_point_out * point_relaxed $@ p_A * R;
+    ensures t' m' := 
+      t = t' /\
+      exists point_out_relaxed : relaxed_coords,
+      coordinates (@m1double point) = feval_point point_out_relaxed /\
+      coords_bounded_by (bounded_by tight_bounds, bounded_by tight_bounds, bounded_by tight_bounds, bounded_by loose_bounds, bounded_by tight_bounds) point_out_relaxed /\
+      m' =* point_out_relaxed $@ p_point_out * point_relaxed $@ p_A * R
+  }.
+
+  (*
 Global Instance spec_of_double : spec_of "double" :=
   fnspec! "double"
     (oxK oyK ozK otaK otbK XK YK ZK TaK TbK : word) /
@@ -278,6 +369,35 @@ Global Instance spec_of_double : spec_of "double" :=
         bounded_by loose_bounds ota' /\ (* could be tight_bounds if we need it, but I don't think we do *)
         bounded_by tight_bounds otb' /\
         m' =* (FElem XK X) * (FElem YK Y) * (FElem ZK Z) * (FElem TaK Ta) * (FElem TbK Tb) * (FElem oxK ox') * (FElem oyK oy') * (FElem ozK oz') * (FElem otaK ota') * (FElem otbK otb') * R }.
+*)
+
+Global Instance spec_of_to_cached: spec_of "to_cached" :=
+  fnspec! "to_cached"
+    (ohalf_ymxK ohalf_ypxK ozK otdK xK yK zK taK tbK dK : word) /
+    (ohalf_ymx ohalf_ypx oz otd x y z ta tb d1 : felem) (p: point) (R: _ -> Prop),
+  { requires t m :=
+      coordinates p = ((feval x), (feval y), (feval z), (feval ta), (feval tb)) /\
+      d = (feval d1) /\
+      bounded_by tight_bounds x /\
+      bounded_by tight_bounds y /\
+      bounded_by tight_bounds z /\
+      bounded_by tight_bounds ta /\
+      bounded_by tight_bounds tb /\
+      bounded_by tight_bounds d1 /\
+      m =* (FElem xK x) * (FElem yK y) * (FElem zK z) * (FElem taK ta) * (FElem tbK tb) *
+           (FElem ohalf_ymxK ohalf_ymx) * (FElem ohalf_ypxK ohalf_ypx) * (FElem ozK oz) * (FElem otdK otd) *
+           (FElem dK d1) * R;
+    ensures t' m' :=
+      t = t' /\
+     exists ohalf_ymx' ohalf_ypx' oz' otd',
+       cached_coordinates (@m1_prep p) = ((feval ohalf_ymx'), (feval ohalf_ypx'), (feval oz'), (feval otd')) /\
+       bounded_by tight_bounds ohalf_ymx' /\
+       bounded_by tight_bounds ohalf_ypx' /\
+       bounded_by tight_bounds oz' /\
+       bounded_by tight_bounds otd' /\
+       m' =* (FElem xK x) * (FElem yK y) * (FElem zK z) * (FElem taK ta) * (FElem tbK tb) *
+             (FElem ohalf_ymxK ohalf_ymx') * (FElem ohalf_ypxK ohalf_ypx') * (FElem ozK oz') * (FElem otdK otd') *
+             (FElem dK d1) * R }.
 
 Global Instance spec_of_to_cached: spec_of "to_cached" :=
   fnspec! "to_cached"
@@ -344,7 +464,6 @@ Local Instance spec_of_fe25519_sub : spec_of "fe25519_sub" := Field.spec_of_BinO
 Local Instance spec_of_fe25519_carry_sub : spec_of "fe25519_carry_sub" := Field.spec_of_BinOp bin_carry_sub.
 Local Instance spec_of_fe25519_from_word : spec_of "fe25519_from_word" := Field.spec_of_from_word.
 Local Instance spec_of_fe26619_copy: spec_of "fe25519_copy" := Field.spec_of_felem_copy.
-Local Instance spec_of_fe26619_copy: spec_of "fe25519_copy" := Field.spec_of_felem_copy.
 
 Local Arguments word.rep : simpl never.
 Local Arguments word.wrap : simpl never.
@@ -352,8 +471,8 @@ Local Arguments word.unsigned : simpl never.
 Local Arguments word.of_Z : simpl never.
 
 Local Ltac cbv_bounds H :=
-  cbv [un_xbounds bin_xbounds bin_ybounds un_square bin_mul bin_add bin_carry_add bin_sub bin_carry_sub un_outbounds bin_outbounds] in H;
-  cbv [un_xbounds bin_xbounds bin_ybounds un_square bin_mul bin_add bin_carry_add bin_sub bin_carry_sub un_outbounds bin_outbounds].
+  cbv [coords_bounded_by un_xbounds bin_xbounds bin_ybounds un_square bin_mul bin_add bin_carry_add bin_sub bin_carry_sub un_outbounds bin_outbounds] in H;
+  cbv [coords_bounded_by un_xbounds bin_xbounds bin_ybounds un_square bin_mul bin_add bin_carry_add bin_sub bin_carry_sub un_outbounds bin_outbounds].
 
 Local Ltac solve_bounds :=
   repeat match goal with
@@ -433,20 +552,79 @@ Proof.
   Strategy -1000 [un_xbounds bin_xbounds bin_ybounds un_square bin_model cached_coordinates proj1_sig bin_mul bin_add bin_carry_add bin_sub un_outbounds bin_outbounds].
 Qed.
 Lemma copypoint_op : program_logic_goal_for_function! copypoint.
+
+Lemma double_ok : program_logic_goal_for_function! double.
 Proof.
-  repeat single_step. 
-  destruct p as (((((x & y) & z) & ta) & tb) & p).
-  destruct op as (((((ox & oy) & oz) & ota) & otb) & op).
-  cbv [proj1_sig proj2_sig fst snd f_to_bytes p_to_bytes coordinates] in * |- .
-  pose proof ptsto_bytes.sep_eq_of_list_word_at_app.
-  seprewrite_in_by (ptsto_bytes.sep_eq_of_list_word_at_app) H4 auto.
-  cbv zeta in H4.
-  
-  cbv [p_to_bytes] in H4.
-  seprewrite_in_by ptsto_bytes.sep_eq_of_list_word_at_app H4
-     ltac:(rewrite ?length_app, ?length_coord; trivial; try Lia.lia). 
+  (* Without this, resolution of cbv stalls out Qed. *)
+  Strategy -1000 [un_xbounds bin_xbounds bin_ybounds un_square bin_mul bin_add bin_carry_add bin_sub bin_carry_sub un_outbounds bin_outbounds].
+
+  (* Unwrap each call in the program. *)
+  (* Each binop produces 2 memory goals on the inputs, 2 bounds goals on the inputs, and 1 memory goal on the output. *)
+  single_step. cbn in H12. (* fe25519_square(trX, X) *)
+   cbv [coords_bounded_by] in H12. cbv match beta delta in H12.
+
+  (* All my new notations are causing a mess. How to get straightline/single_step to expand and simplify them? *)
+  unfold coords_bounded_by in H12. unfold feval_point in H13.
+
+  single_step. (* fe25519_square(trZ, Y) *)
+  single_step. (* fe25519_square(t0, Z) *)
+  single_step. (* fe25519_carry_add(trT, t0, t0) *)
+  single_step. (* fe25519_add(rY, X, Y) *)
+  single_step. (* fe25519_square(t0, rY) *)
+  single_step. (* fe25519_carry_add(otb, trZ, trX) *)
+  single_step. (* fe25519_carry_sub(cZ, trZ, trX) *)
+  single_step. (* fe25519_sub(ota, t0, otb) *)
+  single_step. (* fe25519_sub(cT, trT, cZ) *)
+  single_step. (* fe25519_mul(ox, ota, cT) *)
+  single_step. (* fe25519_mul(oy, otb, cZ) *)
+  single_step. (* fe25519_mul(oz, cZ, cT) *)
+
+  (* Solve the postconditions *)
+  repeat straightline.
+  (* Rewrites the FElems for the stack (in H87) to be about bytes instead *)
+    cbv [FElem] in *.
+    (* Prevent output from being rewritten by seprewrite_in *)
+    remember (Bignum.Bignum felem_size_in_words ozK _) as Pz in H87.
+    remember (Bignum.Bignum felem_size_in_words oyK _) as Py in H87.
+    remember (Bignum.Bignum felem_size_in_words oxK _) as Px in H87.
+    remember (Bignum.Bignum felem_size_in_words otaK _) as Pta in H87.
+    remember (Bignum.Bignum felem_size_in_words otbK _) as Ptb in H87.
+    do 7 (seprewrite_in @Bignum.Bignum_to_bytes H87).
+    subst Pz Py Px Pta Ptb.
+    extract_ex1_and_emp_in H87.
+
+  (* Solve stack/memory stuff *)
+  repeat straightline.
+
+  (* Post-conditions *)
+  exists x9,x10,x11,x7,x5; ssplit. 2,3,4,5,6:solve_bounds.
+  { (* Correctness: result matches Gallina *)
+    cbv [bin_model bin_mul bin_add bin_carry_add bin_sub bin_carry_sub un_model un_square] in *.
+    cbv match beta delta [m1double coordinates proj1_sig].
+    destruct p. cbv [coordinates proj1_sig] in H12.
+    rewrite H12.
+    rewrite F.pow_2_r in *.
+    congruence.
+  }
+  (* Safety: memory is what it should be *)
   ecancel_assumption.
-  repeat single_step.
+Qed.
+
+Lemma to_cached_ok: program_logic_goal_for_function! to_cached.
+Proof.
+  repeat single_step. repeat straightline.
+  
+  exists x1, x3, z, x5; ssplit; try solve_bounds; try solve_mem.
+  
+  destruct p. 
+  cbv [bin_model bin_mul bin_add bin_carry_add bin_sub coordinates proj1_sig] in *.
+  cbv match beta delta [m1_prep cached_coordinates proj1_sig].
+  rewrite H31, H28, H26, H22, H20, H16.
+  simpl. rewrite H6. auto.
+
+    (* Without this, resolution of cbv stalls out Qed. *)
+  Strategy -1000 [un_xbounds bin_xbounds bin_ybounds un_square bin_model cached_coordinates proj1_sig bin_mul bin_add bin_carry_add bin_sub un_outbounds bin_outbounds].
+Qed.
 
 Lemma add_precomputed_ok : program_logic_goal_for_function! add_precomputed.
 Proof.
@@ -496,59 +674,6 @@ Proof.
   (* Safety: memory is what it should be *)
   ecancel_assumption.
 Qed.
-
-Lemma double_ok : program_logic_goal_for_function! double.
-Proof.
-  (* Without this, resolution of cbv stalls out Qed. *)
-  Strategy -1000 [un_xbounds bin_xbounds bin_ybounds un_square bin_mul bin_add bin_carry_add bin_sub bin_carry_sub un_outbounds bin_outbounds].
-
-  (* Unwrap each call in the program. *)
-  (* Each binop produces 2 memory goals on the inputs, 2 bounds goals on the inputs, and 1 memory goal on the output. *)
-  single_step. (* fe25519_square(trX, X) *)
-  single_step. (* fe25519_square(trZ, Y) *)
-  single_step. (* fe25519_square(t0, Z) *)
-  single_step. (* fe25519_carry_add(trT, t0, t0) *)
-  single_step. (* fe25519_add(rY, X, Y) *)
-  single_step. (* fe25519_square(t0, rY) *)
-  single_step. (* fe25519_carry_add(otb, trZ, trX) *)
-  single_step. (* fe25519_carry_sub(cZ, trZ, trX) *)
-  single_step. (* fe25519_sub(ota, t0, otb) *)
-  single_step. (* fe25519_sub(cT, trT, cZ) *)
-  single_step. (* fe25519_mul(ox, ota, cT) *)
-  single_step. (* fe25519_mul(oy, otb, cZ) *)
-  single_step. (* fe25519_mul(oz, cZ, cT) *)
-
-  (* Solve the postconditions *)
-  repeat straightline.
-  (* Rewrites the FElems for the stack (in H87) to be about bytes instead *)
-    cbv [FElem] in *.
-    (* Prevent output from being rewritten by seprewrite_in *)
-    remember (Bignum.Bignum felem_size_in_words ozK _) as Pz in H87.
-    remember (Bignum.Bignum felem_size_in_words oyK _) as Py in H87.
-    remember (Bignum.Bignum felem_size_in_words oxK _) as Px in H87.
-    remember (Bignum.Bignum felem_size_in_words otaK _) as Pta in H87.
-    remember (Bignum.Bignum felem_size_in_words otbK _) as Ptb in H87.
-    do 7 (seprewrite_in @Bignum.Bignum_to_bytes H87).
-    subst Pz Py Px Pta Ptb.
-    extract_ex1_and_emp_in H87.
-
-  (* Solve stack/memory stuff *)
-  repeat straightline.
-
-  (* Post-conditions *)
-  exists x9,x10,x11,x7,x5; ssplit. 2,3,4,5,6:solve_bounds.
-  { (* Correctness: result matches Gallina *)
-    cbv [bin_model bin_mul bin_add bin_carry_add bin_sub bin_carry_sub un_model un_square] in *.
-    cbv match beta delta [m1double coordinates proj1_sig].
-    destruct p. cbv [coordinates proj1_sig] in H12.
-    rewrite H12.
-    rewrite F.pow_2_r in *.
-    congruence.
-  }
-  (* Safety: memory is what it should be *)
-  ecancel_assumption.
-Qed.
-
 
 Lemma readd_ok : program_logic_goal_for_function! readd.
 Proof.
