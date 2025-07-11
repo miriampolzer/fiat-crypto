@@ -52,23 +52,29 @@ Local Existing Instance field_parameters.
 Local Instance frep25519 : Field.FieldRepresentation := field_representation n Field25519.s c.
 Local Existing Instance frep25519_ok.
 
+(* TODO can I pull those together somehow? *)
+Definition felem_size_term := Eval hnf in felem_size_in_bytes.
+
+(* Felem size in bytes in computed form. *)
+Definition felem_size := Eval compute in felem_size_term.
+
 Definition add_precomputed := func! (ox, oy, oz, ota, otb, X1, Y1, Z1, Ta1, Tb1, half_ypx, half_ymx, xyd) {
-  stackalloc 40 as YpX1;
+  stackalloc felem_size as YpX1;
   fe25519_add(YpX1, Y1, X1);
-  stackalloc 40 as YmX1;
+  stackalloc felem_size as YmX1;
   fe25519_sub(YmX1, Y1, X1);
-  stackalloc 40 as A;
+  stackalloc felem_size as A;
   fe25519_mul(A, YmX1, half_ymx);
-  stackalloc 40 as B;
+  stackalloc felem_size as B;
   fe25519_mul(B, YpX1, half_ypx);
-  stackalloc 40 as T1;
+  stackalloc felem_size as T1;
   fe25519_mul(T1, Ta1, Tb1);
-  stackalloc 40 as C;
+  stackalloc felem_size as C;
   fe25519_mul(C, xyd, T1);
   fe25519_sub(ota, B, A);
-  stackalloc 40 as F;
+  stackalloc felem_size as F;
   fe25519_sub(F, Z1, C);
-  stackalloc 40 as G;
+  stackalloc felem_size as G;
   fe25519_add(G, Z1, C);
   fe25519_add(otb, B, A);
   fe25519_mul(ox, ota, F);
@@ -76,28 +82,34 @@ Definition add_precomputed := func! (ox, oy, oz, ota, otb, X1, Y1, Z1, Ta1, Tb1,
   fe25519_mul(oz, F, G)
 }.
 
+Notation "A .x" := (expr.op Syntax.bopname.add A (0*felem_size)) (in custom bedrock_expr at level 3, left associativity).
+Notation "A .y" := (expr.op Syntax.bopname.add A (1*felem_size)) (in custom bedrock_expr at level 3, left associativity).
+Notation "A .z" := (expr.op Syntax.bopname.add A (2*felem_size)) (in custom bedrock_expr at level 3, left associativity).
+Notation "A .ta" := (expr.op Syntax.bopname.add A (3*felem_size)) (in custom bedrock_expr at level 3, left associativity).
+Notation "A .tb" := (expr.op Syntax.bopname.add A (4*felem_size)) (in custom bedrock_expr at level 3, left associativity).
+
 (* Equivalent of m1double in src/Curves/Edwards/XYZT/Basic.v *)
 Definition double := func! (p_point_out, p_A) {
-  stackalloc 40 as trX;
-  fe25519_square(trX, p_A); (* TODO notation to refer to x,y,z,ta,tb? *)
-  stackalloc 40 as trZ;
-  fe25519_square(trZ, p_A+$40);
-  stackalloc 40 as t0;
-  fe25519_square(t0, p_A+$80);
-  stackalloc 40 as trT;
+  stackalloc felem_size as trX;
+  fe25519_square(trX, p_A.x);
+  stackalloc felem_size as trZ;
+  fe25519_square(trZ, p_A.y);
+  stackalloc felem_size as t0;
+  fe25519_square(t0, p_A.z);
+  stackalloc felem_size as trT;
   fe25519_carry_add(trT, t0, t0);
-  stackalloc 40 as rY;
-  fe25519_add(rY, p_A, p_A+$40);
+  stackalloc felem_size as rY;
+  fe25519_add(rY, p_A.x, p_A.z);
   fe25519_square(t0, rY);
-  fe25519_carry_add(p_point_out+$160, trZ, trX);
-  stackalloc 40 as cZ;
+  fe25519_carry_add(p_point_out.tb, trZ, trX);
+  stackalloc felem_size as cZ;
   fe25519_carry_sub(cZ, trZ, trX);
-  fe25519_sub(p_point_out+$120, t0, p_point_out+$160);
-  stackalloc 40 as cT;
+  fe25519_sub(p_point_out.ta, t0, p_point_out.tb);
+  stackalloc felem_size as cT;
   fe25519_sub(cT, trT, cZ);
-  fe25519_mul(p_point_out, p_point_out+$120, cT);
-  fe25519_mul(p_point_out+$40, p_point_out+$160, cZ);
-  fe25519_mul(p_point_out+$80, cZ, cT)
+  fe25519_mul(p_point_out.x, p_point_out.ta, cT);
+  fe25519_mul(p_point_out.y, p_point_out.tb, cZ);
+  fe25519_mul(p_point_out.z, cZ, cT)
 }.
 
 (* Converting a normal point to a cached point to prepare it for readdition. *)
@@ -113,21 +125,21 @@ Definition to_cached := func! (ohalf_ymx, ohalf_ypx, oz, otd, x, y, z, ta, tb, d
 
 (* Equivalent of m1_readd in src/Curves/Edwards/XYZT/Readdition.v *)
 Definition readd := func! (ox, oy, oz, ota, otb, X1, Y1, Z1, Ta1, Tb1, half_YmX, half_YpX, Z2, Td) {
-  stackalloc 40 as A;
+  stackalloc felem_size as A;
   fe25519_sub(A, Y1, X1);
   fe25519_mul(A, A, half_YmX);
-  stackalloc 40 as B;
+  stackalloc felem_size as B;
   fe25519_add(B, Y1, X1);
   fe25519_mul(B, B, half_YpX);
-  stackalloc 40 as C;
+  stackalloc felem_size as C;
   fe25519_mul(C, Ta1, Tb1);
   fe25519_mul(C, C, Td);
-  stackalloc 40 as D;
+  stackalloc felem_size as D;
   fe25519_mul(D, Z1, Z2);
   fe25519_sub(ota, B, A);
-  stackalloc 40 as F;
+  stackalloc felem_size as F;
   fe25519_sub(F, D, C);
-  stackalloc 40 as G;
+  stackalloc felem_size as G;
   fe25519_add(G, D, C);
   fe25519_add(otb, B, A);
   fe25519_mul(ox, ota, F);
@@ -138,7 +150,7 @@ Definition readd := func! (ox, oy, oz, ota, otb, X1, Y1, Z1, Ta1, Tb1, half_YmX,
 (* Copies a normal point, i.e. x y z ta tb. *)
 Definition copy_point := func! (p_out, p_in) {
   fe25519_copy(p_out, p_in);
-  fe25519_copy(p_out+$40, p_in+$40);
+  fe25519_copy(p_out+$felem_size, p_in+$felem_size);
   fe25519_copy(p_out+$80, p_in+$80);
   fe25519_copy(p_out+$120, p_in+$120);
   fe25519_copy(p_out+$160, p_in+$160)
@@ -149,13 +161,13 @@ Definition cached_multiples := func! (p_Ai, p_A) {
   (* The first point is 0, which is (0, 1, 1, 0, 1) in normal coordinates, TODO generate the cached form directly. *)
   stackalloc 200 as zero;
   fe25519_from_bytes(zero, $0);
-  fe25519_from_bytes(zero+$40, $1);
+  fe25519_from_bytes(zero+$felem_size, $1);
   fe25519_from_bytes(zero+$80, $1);
   fe25519_from_bytes(zero+$120, $0);
   fe25519_from_bytes(zero+$160, $1);
-  to_cached(p_Ai, p_Ai+$40, p_Ai+$80, p_Ai+$120, zero, zero+$40, zero+$80, zero+$120, zero+$140, zero+$160);
+  to_cached(p_Ai, p_Ai+$felem_size, p_Ai+$80, p_Ai+$120, zero, zero+$felem_size, zero+$80, zero+$120, zero+$140, zero+$160);
   (* The second point is 1*A.*)
-  to_cached(p_Ai+$160, p_Ai+$160+$40, p_Ai+$160+$80, p_Ai+$160+$120, p_A, p_A+$40, p_A+$80, p_A+$120, p_A+$160);
+  to_cached(p_Ai+$160, p_Ai+$160+$felem_size, p_Ai+$160+$80, p_Ai+$160+$120, p_A, p_A+$felem_size, p_A+$80, p_A+$120, p_A+$160);
   (* Helper array of normal points for double and add results, contains multiples of A. *)
   stackalloc 8*200 as p_Ai_uncached;
   (* copy 1*A into the helper array at index 1 (+200). *)
@@ -165,7 +177,7 @@ Definition cached_multiples := func! (p_Ai, p_A) {
   stackalloc 200 as temp; (* Normal temp point - to store results of double and add. *)
   while i < $16 {
     double(temp, p_Ai_uncached+((i >> $2) * $200)); (* Double (i/2)*A, now temp is i*A. *)
-    to_cached(p_Ai+(i*$160), p_Ai+(i*$160)+$40, p_Ai+(i*$160)+$80, p_Ai+(i*$160)+$120, temp, temp+$40, temp+$80, temp+$120, temp+$140, temp+$160); (* output at i is i*A. *)
+    to_cached(p_Ai+(i*$160), p_Ai+(i*$160)+$felem_size, p_Ai+(i*$160)+$80, p_Ai+(i*$160)+$120, temp, temp+$felem_size, temp+$80, temp+$120, temp+$140, temp+$160); (* output at i is i*A. *)
     if (i < $8) {
       (* Save i*A for later, at index i. *)
       copy_point(p_Ai_uncached+(i*$200), temp)
@@ -236,23 +248,6 @@ Instance spec_of_fe25519_half : spec_of "fe25519_half" :=
         feval result = F.div (feval input) (F.add F.one F.one) /\
         m' =* (FElem result_location result)  * R}.
 
-        (* byte-wise notation, I'd rather use the felement-wise one. 
-        
-(* takes forever to evaluate, but it's 40. *)
-(* Eval cbv -[F.to_Z] in (felem_size_in_bytes). *)
-(* Search (_ -> list byte). *)
-(* Print le_split. *)
-
-(* this is a very quick and dirty form of what I've seen in P256. *)
-Coercion f_to_bytes (x : F M_pos) : list byte := le_split 40 x. (* this looks bad. also, what's the uniform inheritance condition? *)
-Coercion p_to_bytes (p : point) : list byte := match (coordinates p) with | (x,y,z,ta,tb) =>
-    f_to_bytes x ++ f_to_bytes y ++ f_to_bytes z ++ f_to_bytes ta ++ f_to_bytes tb end.
-Local Notation "xs $@ a" := (map.of_list_word_at a xs) (at level 10, format "xs $@ a").
-(* Wouldn't it be much nicer to do this less low-level? *)
-(* Ideally I think I would want to go from F M_pos to felem (i.e. list word)*)
-*)
-
-Check bounded_by.
 (* TODO Notation or Definition? What's better? *)
 Notation coord_bounds := ((felem -> Prop) * (felem -> Prop) * (felem -> Prop) * (felem -> Prop) * (felem -> Prop))%type.
 Notation relaxed_coords := (felem * felem * felem * felem * felem)%type.
@@ -267,12 +262,44 @@ Definition coords_bounded_by (bounds : coord_bounds) '(x,y,z,ta,tb) : Prop :=
   let '(bounds_x, bounds_y, bounds_z, bounds_ta, bounds_tb) := bounds in
   bounds_x x /\ bounds_y y /\ bounds_z z /\ bounds_ta ta /\ bounds_tb tb.
 
-Check FElem.
+Eval hnf in FElem.
+(* The refactoring Andres has will change scalar to be defined in terms of le_split. But still doesn't
+   help as long as array is in FElem, cause array is defined in terms of sep, which means even after that change
+   I won't be able to use FElem to define a predicate for multiple felems in terms of $@.
+   
+   What I'd want is a coercion/mapping from felem (list word) to a byte list.
+   le_split maps from Z to bytes.
+   There's the unsigned function which maps a word to Z.
+   So that's how I can map felem to list bytes. Ideally this wouldn't be done here, but I can try it out.
+   *)
+Check scalar.
+Locate array.
+Locate le_split.
 
-Local Notation "$ n" := (match word.of_Z n return word with w => w end) (at level 9, format "$ n").
 Local Notation "p .+ n" := (word.add p (word.of_Z n)) (at level 50, format "p .+ n", left associativity).
+(* TODO what's the uniform inheritance condition? *)
+(* TODO I suppose we'd want this in terms of FElem, otherwise it becomes hard to reason about stuff? 
+   Yup, because my subfunctions are spec'd in terms of FElem.. I can try to write a helper lemma. *)
+Coercion f_to_bytes (x : felem) : list byte := flat_map (le_split 32) (map word.unsigned x).
+Coercion coords_to_bytes '(x, y, z, ta, tb) : list byte :=
+    (f_to_bytes x ++ f_to_bytes y ++ f_to_bytes z ++ f_to_bytes ta ++ f_to_bytes tb)%list.
+Local Notation "c $@ p" := (map.of_list_word_at p c) (at level 10, format "c $@ p").
 
-Local Notation "c $@ p" := (let '(x,y,z,ta,tb) := c in sep (sep (sep (sep (FElem p x) (FElem (p .+ 40) y)) (FElem (p .+ 80) z)) (FElem (p .+ 120) ta)) (FElem (p .+ 160) tb)) (at level 10, format "c $@ p").
+Locate sep_eq_of_list_word_at_app.
+
+(* FElem is used for the specs of the field operations, so unless we start having FElem in terms of $@,
+we need to explictly prove this implication to use the new notation: *)
+Lemma coords_to_FElem (x y z ta tb : felem) p m R :
+  m =* (x, y, z, ta, tb) $@ p * R -> m =* FElem p x * FElem (word.of_Z (p + felem_size)) y * FElem (word.of_Z (p + 2*felem_size)) z * FElem (word.of_Z (p + 3*felem_size)) ta * FElem (word.of_Z (p + 4*felem_size)) tb * R.
+Proof.
+  cbv delta [coords_to_bytes f_to_bytes].
+  hnf in *.
+  repeat straightline.
+  (* seprewrite_in ptsto_bytes.sep_eq_of_list_word_at_app H. *)
+  (* this should work *)
+  (* The P256 PR doesn't have this issue because it doesn't use the generated field operations. *)
+Admitted.
+
 
 
 Instance spec_copy_point : spec_of "copy_point" :=
@@ -493,6 +520,8 @@ Proof.
 
   destruct p as ((((x,y),z),ta),tb).
   destruct anything as ((((ax, ay), az), ata), atb).
+
+  single_step.
 
   repeat single_step.
   repeat straightline.
