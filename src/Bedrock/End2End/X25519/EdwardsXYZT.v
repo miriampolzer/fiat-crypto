@@ -219,13 +219,12 @@ Section WithParameters.
   Context {a_eq_minus1:a = F.opp F.one} {twice_d} {k_eq_2d:twice_d = (F.add d d)} {nonzero_d: d<>F.zero}.
 
 Local Notation "m =* P" := ((P%sep) m) (at level 70, only parsing).
-Local Notation "xs $@ a" := (Array.array ptsto (word.of_Z 1) a xs) (at level 10, format "xs $@ a").
 
 Local Notation FElem := (FElem(FieldRepresentation:=frep25519)).
 Local Notation bounded_by := (bounded_by(FieldRepresentation:=frep25519)).
 Local Notation word := (Naive.word 32).
 Local Notation felem := (felem(FieldRepresentation:=frep25519)).
-Local Notation point := (point(Fzero:=F.zero)(Fadd:=F.add)(Fmul:=F.mul)(a:=a)(d:=d)).
+Local Notation point := (point(Feq:=Logic.eq)(Fzero:=F.zero)(Fadd:=F.add)(Fmul:=F.mul)(a:=a)(d:=d)).
 Local Notation cached := (cached(Fzero:=F.zero)(Fadd:=F.add)(Fmul:=F.mul)(a:=a)(d:=d)).
 Local Notation coordinates := (coordinates(Feq:=Logic.eq)).
 Local Notation m1double :=
@@ -366,6 +365,41 @@ Global Instance spec_of_readd : spec_of "readd" :=
         bounded_by loose_bounds otb' /\
         m' =*(FElem X1K X1) * (FElem Y1K Y1) * (FElem Z1K Z1) * (FElem Ta1K Ta1) * (FElem Tb1K Tb1) * (FElem half_YmXK half_YmX) * (FElem half_YpXK half_YpX) * (FElem Z2K Z2) * (FElem TdK Td)* (FElem oxK ox') * (FElem oyK oy') * (FElem ozK oz') * (FElem otaK ota') * (FElem otbK otb') * R }.
 
+(* Simplify point notation, but this is not byte format. *)
+Local Notation "p .+ n" := (word.add p (word.of_Z n)) (at level 50, format "p .+ n", left associativity).
+
+Local Notation "c $@ p" := (let '(x,y,z,ta,tb) := c in sep (sep (sep (sep (FElem p x) (FElem (p .+ 40) y)) (FElem (p .+ 80) z)) (FElem (p .+ 120) ta)) (FElem (p .+ 160) tb)) (at level 10, format "c $@ p").
+
+Instance spec_copy_point : spec_of "copy_point" :=
+  fnspec! "copy_point" (p_out p_a : word) / anything a R,
+  { requires t m := 
+      m =* ( anything $@ p_out ) * ( a $@ p_a ) * R;
+    ensures t' m' :=
+      t = t' /\
+      m' =* ( a $@ p_out ) * ( a $@ p_a)  * R}.
+
+Definition point_felem := (felem * felem * felem * felem * felem)%type.
+Definition cached_point_felem := (felem * felem * felem * felem)%type.
+
+Fixpoint cached_point_array_at (p : word) (ai : list cached_point_felem) :=
+  match ai with
+    | nil => emp True
+    | cons a ax => sep ((let '(half_YmX, half_YpX, z, td) := c in sep (sep (sep (sep (FElem p x) (FElem (p .+ 40) y)) (FElem (p .+ 80) z)) (FElem (p .+ 120) ta)) (FElem (p .+ 160) tb))) (cached_point_array_at (p + 5*felem_size) ax)
+  end.
+
+Instance spec_of_cached_multiples : spec_of "cached_multiples" :=
+    fnspec! "cached_multiples"
+      ( p_ai p_a p_d : word) /
+      ( df : felem ) ( a : point_felem ) ( anything : list cached_point_felem )  ( R : _ -> Prop),
+  {
+    requires t m :=
+      d = feval df /\
+      bounded_by tight_bounds df /\
+      m =* FElem p_d df * R;
+    ensures t' m' :=
+      t = t' /\
+      m' =* FElem p_d df * R
+  }.
 
 Local Instance spec_of_fe25519_square : spec_of "fe25519_square" := Field.spec_of_UnOp un_square.
 Local Instance spec_of_fe25519_mul : spec_of "fe25519_mul" := Field.spec_of_BinOp bin_mul.
@@ -374,6 +408,7 @@ Local Instance spec_of_fe25519_carry_add : spec_of "fe25519_carry_add" := Field.
 Local Instance spec_of_fe25519_sub : spec_of "fe25519_sub" := Field.spec_of_BinOp bin_sub.
 Local Instance spec_of_fe25519_carry_sub : spec_of "fe25519_carry_sub" := Field.spec_of_BinOp bin_carry_sub.
 Local Instance spec_of_fe25519_from_word : spec_of "fe25519_from_word" := Field.spec_of_from_word.
+Local Instance spec_of_fe25519_from_bytes : spec_of "fe25519_from_bytes" := Field.spec_of_from_bytes.
 Local Instance spec_of_fe26619_copy: spec_of "fe25519_copy" := Field.spec_of_felem_copy.
 
 Local Arguments word.rep : simpl never.
@@ -446,6 +481,14 @@ Proof.
   Strategy -1000 [bin_outbounds bin_add].
   reflexivity. (* ...and completes immediately *)
 Qed.
+
+Lemma cached_multiples_ok: program_logic_goal_for_function! cached_multiples.
+Proof.
+  repeat straightline.
+
+  (* Destruct points. *)
+
+  repeat single_step.
 
 Lemma to_cached_ok: program_logic_goal_for_function! to_cached.
 Proof.
