@@ -136,6 +136,77 @@ Definition readd := func! (ox, oy, oz, ota, otb, X1, Y1, Z1, Ta1, Tb1, half_YmX,
   fe25519_mul(oz, F, G)
 }.
 
+(* TODO can I pull those together somehow? *)
+Definition felem_size_term := Eval hnf in felem_size_in_bytes.
+(* Felem size in bytes in computed form. *)
+Definition felem_size := Eval compute in felem_size_term.
+
+(* Normal point format. *)
+Notation "A .x" := (expr.op Syntax.bopname.add A (0*felem_size)) (in custom bedrock_expr at level 3, left associativity).
+Notation "A .y" := (expr.op Syntax.bopname.add A (1*felem_size)) (in custom bedrock_expr at level 3, left associativity).
+Notation "A .z" := (expr.op Syntax.bopname.add A (2*felem_size)) (in custom bedrock_expr at level 3, left associativity).
+Notation "A .ta" := (expr.op Syntax.bopname.add A (3*felem_size)) (in custom bedrock_expr at level 3, left associativity).
+Notation "A .tb" := (expr.op Syntax.bopname.add A (4*felem_size)) (in custom bedrock_expr at level 3, left associativity).
+
+(* Cached points. *)
+Notation "A .half_YmX" := (expr.op Syntax.bopname.add A (0*felem_size)) (in custom bedrock_expr at level 3, left associativity).
+Notation "A .half_YpX" := (expr.op Syntax.bopname.add A (1*felem_size)) (in custom bedrock_expr at level 3, left associativity).
+Notation "A .z" := (expr.op Syntax.bopname.add A (2*felem_size)) (in custom bedrock_expr at level 3, left associativity).
+Notation "A .td" := (expr.op Syntax.bopname.add A (3*felem_size)) (in custom bedrock_expr at level 3, left associativity).
+
+(* Array notation for arrays of points *)
+Notation "A [ i ]" := (expr.op Syntax.bopname.add A (expr.op Syntax.bopname.mul i (5*felem_size))) (in custom bedrock_expr at level 3, left associativity).
+
+(* Array notation for arrays of cached points *)
+Notation "A '[ i ]" := (expr.op Syntax.bopname.add A (expr.op Syntax.bopname.mul i  (4*felem_size))) (in custom bedrock_expr at level 3, left associativity).
+
+
+(* Copies a normal point, i.e. x y z ta tb. *)
+Definition copy_point := func! (p_out, p_in) {
+  fe25519_copy(p_out.x, p_in.x);
+  fe25519_copy(p_out.y, p_in.y);
+  fe25519_copy(p_out.z, p_in.z);
+  fe25519_copy(p_out.ta, p_in.ta);
+  fe25519_copy(p_out.tb, p_in.tb)
+}.
+
+Definition cached_multiples := func! (p_Ai, p_A, p_d) {
+  (* The first point is 0, which is (0, 1, 1, 0, 1) in normal coordinates, TODO generate the cached form directly. *)
+  stackalloc 5*felem_size as zero;
+  fe25519_from_bytes(zero.x, $0);
+  fe25519_from_bytes(zero.y, $1);
+  fe25519_from_bytes(zero.z, $1);
+  fe25519_from_bytes(zero.ta, $0);
+  fe25519_from_bytes(zero.tb, $1);
+  to_cached(p_Ai'[$0].half_YmX, p_Ai'[$0].half_YpX, p_Ai'[$0].z, p_Ai'[$0].td, zero.x, zero.y, zero.z, zero.ta, zero.tb, p_d);
+  (* The second point is 1*A.*)
+  to_cached(p_Ai'[$1].half_YmX, p_Ai'[$1].half_YpX, p_Ai'[$1].z, p_Ai'[$1].td, p_A.x, p_A.y, p_A.z, p_A.ta, p_A.tb, p_d);
+  (* Helper array of normal points for double and add results, contains multiples of A. *)
+  stackalloc 8*5*felem_size as p_Ai_uncached;
+  (* copy 1*A into the helper array at index 1 (+200). *)
+  copy_point(p_Ai_uncached[$1], p_A);
+  (* Loop to generate multiples. *)
+  i = $2;
+  stackalloc 5*felem_size as temp; (* Normal temp point - to store results of double and add. *)
+  while (i < $16) {
+    double(temp.x, temp.y, temp.z, temp.ta, temp.tb, p_Ai_uncached[(i >> $2)].x, p_Ai_uncached[(i >> $2)].y, p_Ai_uncached[(i >> $2)].z, p_Ai_uncached[(i >> $2)].ta, p_Ai_uncached[(i >> $2)].tb); (* Double (i/2)*A, now temp is i*A. *)
+    to_cached(p_Ai'[i].half_YmX, p_Ai'[i].half_YpX, p_Ai'[i].z, p_Ai'[i].td, temp.x, temp.y, temp.z, temp.ta, temp.tb, p_d); (* output at i is i*A. *)
+    if (i < $8) {
+      (* Save i*A for later, at index i. *)
+      copy_point(p_Ai_uncached[i], temp)
+    };
+    (* Now for the odd numbers, calculate (i+1)*A, store in temp. *)
+    readd(temp.x, temp.y, temp.z, temp.ta, temp.tb, p_A.x, p_A.y, p_A.z, p_A.ta, p_A.tb, p_Ai'[i].half_YmX, p_Ai'[i].half_YpX, p_Ai'[i].z, p_Ai'[i].td);
+    (* Store (i+1)*A in the result array. *)
+    to_cached(p_Ai'[i+$1].half_YmX, p_Ai'[i+$1].half_YpX, p_Ai'[i+$1].z, p_Ai'[i+$1].td, temp.x, temp.y, temp.z, temp.ta, temp.tb, p_d);
+    if (i < $7) {
+      (* Save (i+1)*A for later. *)
+      copy_point(p_Ai_uncached[i+$1], temp)
+    };
+    i = i + $2
+  }
+}.
+
 Section WithParameters.
   Context {two_lt_M: 2 < M_pos}.
   (* TODO: Can we provide actual values/proofs for these, rather than just sticking them in the context? *)
