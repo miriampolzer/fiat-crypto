@@ -52,29 +52,23 @@ Local Existing Instance field_parameters.
 Local Instance frep25519 : Field.FieldRepresentation := field_representation n Field25519.s c.
 Local Existing Instance frep25519_ok.
 
-(* TODO can I pull those together somehow? *)
-Definition felem_size_term := Eval hnf in felem_size_in_bytes.
-
-(* Felem size in bytes in computed form. *)
-Definition felem_size := Eval compute in felem_size_term.
-
 Definition add_precomputed := func! (ox, oy, oz, ota, otb, X1, Y1, Z1, Ta1, Tb1, half_ypx, half_ymx, xyd) {
-  stackalloc felem_size as YpX1;
+  stackalloc 40 as YpX1;
   fe25519_add(YpX1, Y1, X1);
-  stackalloc felem_size as YmX1;
+  stackalloc 40 as YmX1;
   fe25519_sub(YmX1, Y1, X1);
-  stackalloc felem_size as A;
+  stackalloc 40 as A;
   fe25519_mul(A, YmX1, half_ymx);
-  stackalloc felem_size as B;
+  stackalloc 40 as B;
   fe25519_mul(B, YpX1, half_ypx);
-  stackalloc felem_size as T1;
+  stackalloc 40 as T1;
   fe25519_mul(T1, Ta1, Tb1);
-  stackalloc felem_size as C;
+  stackalloc 40 as C;
   fe25519_mul(C, xyd, T1);
   fe25519_sub(ota, B, A);
-  stackalloc felem_size as F;
+  stackalloc 40 as F;
   fe25519_sub(F, Z1, C);
-  stackalloc felem_size as G;
+  stackalloc 40 as G;
   fe25519_add(G, Z1, C);
   fe25519_add(otb, B, A);
   fe25519_mul(ox, ota, F);
@@ -82,6 +76,12 @@ Definition add_precomputed := func! (ox, oy, oz, ota, otb, X1, Y1, Z1, Ta1, Tb1,
   fe25519_mul(oz, F, G)
 }.
 
+(* TODO can I pull those together somehow? *)
+Definition felem_size_term := Eval hnf in felem_size_in_bytes.
+(* Felem size in bytes in computed form. *)
+Definition felem_size := Eval compute in felem_size_term.
+
+(* TODO how do we call these points? I call them normal points in my head :D *)
 Notation "A .x" := (expr.op Syntax.bopname.add A (0*felem_size)) (in custom bedrock_expr at level 3, left associativity).
 Notation "A .y" := (expr.op Syntax.bopname.add A (1*felem_size)) (in custom bedrock_expr at level 3, left associativity).
 Notation "A .z" := (expr.op Syntax.bopname.add A (2*felem_size)) (in custom bedrock_expr at level 3, left associativity).
@@ -89,27 +89,28 @@ Notation "A .ta" := (expr.op Syntax.bopname.add A (3*felem_size)) (in custom bed
 Notation "A .tb" := (expr.op Syntax.bopname.add A (4*felem_size)) (in custom bedrock_expr at level 3, left associativity).
 
 (* Equivalent of m1double in src/Curves/Edwards/XYZT/Basic.v *)
-Definition double := func! (p_point_out, p_A) {
+(* TODO I think one could get rid of some allocations here, not all helper variables are needed. *)
+Definition double := func! (p_out, p_a) {
   stackalloc felem_size as trX;
-  fe25519_square(trX, p_A.x);
+  fe25519_square(trX, p_a.x);
   stackalloc felem_size as trZ;
-  fe25519_square(trZ, p_A.y);
+  fe25519_square(trZ, p_a.y);
   stackalloc felem_size as t0;
-  fe25519_square(t0, p_A.z);
+  fe25519_square(t0, p_a.z);
   stackalloc felem_size as trT;
   fe25519_carry_add(trT, t0, t0);
   stackalloc felem_size as rY;
-  fe25519_add(rY, p_A.x, p_A.z);
+  fe25519_add(rY, p_a.x, p_a.y);
   fe25519_square(t0, rY);
-  fe25519_carry_add(p_point_out.tb, trZ, trX);
+  fe25519_carry_add(p_out.tb, trZ, trX);
   stackalloc felem_size as cZ;
   fe25519_carry_sub(cZ, trZ, trX);
-  fe25519_sub(p_point_out.ta, t0, p_point_out.tb);
+  fe25519_sub(p_out.ta, t0, p_out.tb);
   stackalloc felem_size as cT;
   fe25519_sub(cT, trT, cZ);
-  fe25519_mul(p_point_out.x, p_point_out.ta, cT);
-  fe25519_mul(p_point_out.y, p_point_out.tb, cZ);
-  fe25519_mul(p_point_out.z, cZ, cT)
+  fe25519_mul(p_out.x, p_out.ta, cT);
+  fe25519_mul(p_out.y, p_out.tb, cZ);
+  fe25519_mul(p_out.z, cZ, cT)
 }.
 
 (* Converting a normal point to a cached point to prepare it for readdition. *)
@@ -125,73 +126,26 @@ Definition to_cached := func! (ohalf_ymx, ohalf_ypx, oz, otd, x, y, z, ta, tb, d
 
 (* Equivalent of m1_readd in src/Curves/Edwards/XYZT/Readdition.v *)
 Definition readd := func! (ox, oy, oz, ota, otb, X1, Y1, Z1, Ta1, Tb1, half_YmX, half_YpX, Z2, Td) {
-  stackalloc felem_size as A;
+  stackalloc 40 as A;
   fe25519_sub(A, Y1, X1);
   fe25519_mul(A, A, half_YmX);
-  stackalloc felem_size as B;
+  stackalloc 40 as B;
   fe25519_add(B, Y1, X1);
   fe25519_mul(B, B, half_YpX);
-  stackalloc felem_size as C;
+  stackalloc 40 as C;
   fe25519_mul(C, Ta1, Tb1);
   fe25519_mul(C, C, Td);
-  stackalloc felem_size as D;
+  stackalloc 40 as D;
   fe25519_mul(D, Z1, Z2);
   fe25519_sub(ota, B, A);
-  stackalloc felem_size as F;
+  stackalloc 40 as F;
   fe25519_sub(F, D, C);
-  stackalloc felem_size as G;
+  stackalloc 40 as G;
   fe25519_add(G, D, C);
   fe25519_add(otb, B, A);
   fe25519_mul(ox, ota, F);
   fe25519_mul(oy, G, otb);
   fe25519_mul(oz, F, G)
-}.
-
-(* Copies a normal point, i.e. x y z ta tb. *)
-Definition copy_point := func! (p_out, p_in) {
-  fe25519_copy(p_out, p_in);
-  fe25519_copy(p_out+$felem_size, p_in+$felem_size);
-  fe25519_copy(p_out+$80, p_in+$80);
-  fe25519_copy(p_out+$120, p_in+$120);
-  fe25519_copy(p_out+$160, p_in+$160)
-}.
-
-(* Input is a normal point p, output is multiples of the input in cached format. *)
-Definition cached_multiples := func! (p_Ai, p_A) {
-  (* The first point is 0, which is (0, 1, 1, 0, 1) in normal coordinates, TODO generate the cached form directly. *)
-  stackalloc 200 as zero;
-  fe25519_from_bytes(zero, $0);
-  fe25519_from_bytes(zero+$felem_size, $1);
-  fe25519_from_bytes(zero+$80, $1);
-  fe25519_from_bytes(zero+$120, $0);
-  fe25519_from_bytes(zero+$160, $1);
-  to_cached(p_Ai, p_Ai+$felem_size, p_Ai+$80, p_Ai+$120, zero, zero+$felem_size, zero+$80, zero+$120, zero+$140, zero+$160);
-  (* The second point is 1*A.*)
-  to_cached(p_Ai+$160, p_Ai+$160+$felem_size, p_Ai+$160+$80, p_Ai+$160+$120, p_A, p_A+$felem_size, p_A+$80, p_A+$120, p_A+$160);
-  (* Helper array of normal points for double and add results, contains multiples of A. *)
-  stackalloc 8*200 as p_Ai_uncached;
-  (* copy 1*A into the helper array at index 1 (+200). *)
-  copy_point(p_Ai_uncached+$200, p_A);
-  (* Loop to generate multiples. *)
-  i = $2;
-  stackalloc 200 as temp; (* Normal temp point - to store results of double and add. *)
-  while i < $16 {
-    double(temp, p_Ai_uncached+((i >> $2) * $200)); (* Double (i/2)*A, now temp is i*A. *)
-    to_cached(p_Ai+(i*$160), p_Ai+(i*$160)+$felem_size, p_Ai+(i*$160)+$80, p_Ai+(i*$160)+$120, temp, temp+$felem_size, temp+$80, temp+$120, temp+$140, temp+$160); (* output at i is i*A. *)
-    if (i < $8) {
-      (* Save i*A for later, at index i. *)
-      copy_point(p_Ai_uncached+(i*$200), temp)
-    };
-    (* Now for the odd numbers, calculate (i+1)*A, store in temp. *)
-    readd(temp, temp+$40, temp+$80, temp+$120, temp+$140, temp+$160, p_A, p_A+$40, p_A+$80, p_A+$120, p_A+$160, p_Ai+(i*$160), p_Ai+(i*$160)+$40, p_Ai+(i*$160)+$80, p_Ai+(i*$160)+$120);
-    (* Store (i+1)*A in the result array. *)
-    to_cached(p_Ai+((i+$1)*$160), p_Ai+((i+$1)*$160)+$40, p_Ai+((i+$1)*$160)+$80, p_Ai+((i+$1)*$160)+$120, temp, temp+$40, temp+$80, temp+$120, temp+$140, temp+$160);
-    if (i < $7) {
-      (* Save (i+1)*A for later. *)
-      copy_point(p_Ai_uncached+((i+$1)*$200), temp)
-    };
-    i = i + $2
-  }
 }.
 
 Section WithParameters.
@@ -248,68 +202,6 @@ Instance spec_of_fe25519_half : spec_of "fe25519_half" :=
         feval result = F.div (feval input) (F.add F.one F.one) /\
         m' =* (FElem result_location result)  * R}.
 
-(* TODO Notation or Definition? What's better? *)
-Notation coord_bounds := ((felem -> Prop) * (felem -> Prop) * (felem -> Prop) * (felem -> Prop) * (felem -> Prop))%type.
-Notation relaxed_coords := (felem * felem * felem * felem * felem)%type.
-
-Check feval.
-
-Definition feval_point '(x, y, z, ta, tb) := (feval x, feval y, feval z, feval ta, feval tb).
-
-(* TODO there should be a computationally elegant way to do this, by using function application with cross product *)
-(* TODO what does the ' in front of let do? I needed it for this to work. *)
-Definition coords_bounded_by (bounds : coord_bounds) '(x,y,z,ta,tb) : Prop :=
-  let '(bounds_x, bounds_y, bounds_z, bounds_ta, bounds_tb) := bounds in
-  bounds_x x /\ bounds_y y /\ bounds_z z /\ bounds_ta ta /\ bounds_tb tb.
-
-Eval hnf in FElem.
-(* The refactoring Andres has will change scalar to be defined in terms of le_split. But still doesn't
-   help as long as array is in FElem, cause array is defined in terms of sep, which means even after that change
-   I won't be able to use FElem to define a predicate for multiple felems in terms of $@.
-   
-   What I'd want is a coercion/mapping from felem (list word) to a byte list.
-   le_split maps from Z to bytes.
-   There's the unsigned function which maps a word to Z.
-   So that's how I can map felem to list bytes. Ideally this wouldn't be done here, but I can try it out.
-   *)
-Check scalar.
-Locate array.
-Locate le_split.
-
-Local Notation "p .+ n" := (word.add p (word.of_Z n)) (at level 50, format "p .+ n", left associativity).
-(* TODO what's the uniform inheritance condition? *)
-(* TODO I suppose we'd want this in terms of FElem, otherwise it becomes hard to reason about stuff? 
-   Yup, because my subfunctions are spec'd in terms of FElem.. I can try to write a helper lemma. *)
-Coercion f_to_bytes (x : felem) : list byte := flat_map (le_split 32) (map word.unsigned x).
-Coercion coords_to_bytes '(x, y, z, ta, tb) : list byte :=
-    (f_to_bytes x ++ f_to_bytes y ++ f_to_bytes z ++ f_to_bytes ta ++ f_to_bytes tb)%list.
-Local Notation "c $@ p" := (map.of_list_word_at p c) (at level 10, format "c $@ p").
-
-Locate sep_eq_of_list_word_at_app.
-
-(* FElem is used for the specs of the field operations, so unless we start having FElem in terms of $@,
-we need to explictly prove this implication to use the new notation: *)
-Lemma coords_to_FElem (x y z ta tb : felem) p m R :
-  m =* (x, y, z, ta, tb) $@ p * R -> m =* FElem p x * FElem (word.of_Z (p + felem_size)) y * FElem (word.of_Z (p + 2*felem_size)) z * FElem (word.of_Z (p + 3*felem_size)) ta * FElem (word.of_Z (p + 4*felem_size)) tb * R.
-Proof.
-  cbv delta [coords_to_bytes f_to_bytes].
-  hnf in *.
-  repeat straightline.
-  (* seprewrite_in ptsto_bytes.sep_eq_of_list_word_at_app H. *)
-  (* this should work *)
-  (* The P256 PR doesn't have this issue because it doesn't use the generated field operations. *)
-Admitted.
-
-
-
-Instance spec_copy_point : spec_of "copy_point" :=
-  fnspec! "copy_point" (p_out p_p : word) / (p anything: relaxed_coords) R,
-  { requires t m := 
-      m =* (anything$@p_out) * (p$@p_p) * R;
-    ensures t' m' :=
-      t = t' /\
-      m' =* (p$@p_out) * (p$@p_p)  * R}.
-
 Global Instance spec_of_add_precomputed : spec_of "add_precomputed" :=
   fnspec! "add_precomputed"
     (oxK oyK ozK otaK otbK X1K Y1K Z1K Ta1K Tb1K half_ypxK half_ymxK xydK : word) /
@@ -335,47 +227,34 @@ Global Instance spec_of_add_precomputed : spec_of "add_precomputed" :=
         bounded_by loose_bounds otb' /\
         m' =* (FElem X1K X1) * (FElem Y1K Y1) * (FElem Z1K Z1) * (FElem Ta1K Ta1) * (FElem Tb1K Tb1) * (FElem half_ypxK half_ypx) * (FElem half_ymxK half_ymx) * (FElem xydK xyd) * (FElem oxK ox') * (FElem oyK oy') * (FElem ozK oz') * (FElem otaK ota') * (FElem otbK otb') * R }.
 
+Definition coords_bounds := (Field.bounds * Field.bounds * Field.bounds * Field.bounds * Field.bounds)%type.
+(* TODO find a good name for this construct. *)
+Definition bounded_coords := (felem * felem * felem * felem * felem)%type.
+Definition feval_coords '(x, y, z, ta, tb) := (feval x, feval y, feval z, feval ta, feval tb).
+
+Definition coords_bounded_by (bounds : coords_bounds) '(x,y,z,ta,tb) : Prop :=
+  let '(bounds_x, bounds_y, bounds_z, bounds_ta, bounds_tb) := bounds in
+  bounded_by bounds_x x /\ bounded_by bounds_y y /\ bounded_by bounds_z z /\ bounded_by bounds_ta ta /\ bounded_by bounds_tb tb.
+
+Local Notation "p .+ n" := (word.add p (word.of_Z n)) (at level 50, format "p .+ n", left associativity).
+Local Notation "c $@ p" := (let '(x,y,z,ta,tb) := c in sep (sep (sep (sep (FElem (p .+ 0) x) (FElem (p .+ 40) y)) (FElem (p .+ 80) z)) (FElem (p .+ 120) ta)) (FElem (p .+ 160) tb)) (at level 10, format "c $@ p").
+
+
 Global Instance spec_of_double : spec_of "double" :=
   fnspec! "double"
-    (p_point_out p_A : word) /
-    (point : point) (point_relaxed anything: relaxed_coords) (R : _ -> Prop),
-  {
+    (p_out p_a : word) /
+    (p : point) (a anything: bounded_coords) (R : _ -> Prop), {
     requires t m :=
-      coords_bounded_by (bounded_by tight_bounds, bounded_by tight_bounds, bounded_by loose_bounds, bounded_by loose_bounds, bounded_by loose_bounds) point_relaxed /\
-      feval_point point_relaxed = coordinates point /\
-      m =* anything $@ p_point_out * point_relaxed $@ p_A * R;
+      coords_bounded_by (tight_bounds, tight_bounds, loose_bounds, loose_bounds, loose_bounds) a /\
+      feval_coords a = coordinates p /\
+      m =* anything $@ p_out * a $@ p_a * R;
     ensures t' m' := 
       t = t' /\
-      exists point_out_relaxed : relaxed_coords,
-      coordinates (@m1double point) = feval_point point_out_relaxed /\
-      coords_bounded_by (bounded_by tight_bounds, bounded_by tight_bounds, bounded_by tight_bounds, bounded_by loose_bounds, bounded_by tight_bounds) point_out_relaxed /\
-      m' =* point_out_relaxed $@ p_point_out * point_relaxed $@ p_A * R
+      exists a_double : bounded_coords,
+      coordinates (@m1double p) = feval_coords a_double /\
+      coords_bounded_by (tight_bounds, tight_bounds, tight_bounds, loose_bounds, tight_bounds) a_double /\
+      m' =* a_double $@ p_out * a $@ p_a * R
   }.
-
-  (*
-Global Instance spec_of_double : spec_of "double" :=
-  fnspec! "double"
-    (oxK oyK ozK otaK otbK XK YK ZK TaK TbK : word) /
-    (ox oy oz ota otb X Y Z Ta Tb : felem) (p : point) (R : _ -> Prop),
-  { requires t m :=
-      coordinates p = ((feval X), (feval Y), (feval Z), (feval Ta), (feval Tb)) /\
-      bounded_by tight_bounds X /\
-      bounded_by tight_bounds Y /\
-      bounded_by loose_bounds Z /\
-      bounded_by loose_bounds Ta /\
-      bounded_by loose_bounds Tb /\
-      m =* (FElem XK X) * (FElem YK Y) * (FElem ZK Z) * (FElem TaK Ta) * (FElem TbK Tb) * (FElem oxK ox) * (FElem oyK oy) * (FElem ozK oz) * (FElem otaK ota) * (FElem otbK otb) * R;
-    ensures t' m' :=
-      t = t' /\
-      exists ox' oy' oz' ota' otb',
-        ((feval ox'), (feval oy'), (feval oz'), (feval ota'), (feval otb')) = coordinates (@m1double p) /\
-        bounded_by tight_bounds ox' /\
-        bounded_by tight_bounds oy' /\
-        bounded_by tight_bounds oz' /\
-        bounded_by loose_bounds ota' /\ (* could be tight_bounds if we need it, but I don't think we do *)
-        bounded_by tight_bounds otb' /\
-        m' =* (FElem XK X) * (FElem YK Y) * (FElem ZK Z) * (FElem TaK Ta) * (FElem TbK Tb) * (FElem oxK ox') * (FElem oyK oy') * (FElem ozK oz') * (FElem otaK ota') * (FElem otbK otb') * R }.
-*)
 
 Global Instance spec_of_to_cached: spec_of "to_cached" :=
   fnspec! "to_cached"
@@ -514,30 +393,16 @@ Proof.
   reflexivity. (* ...and completes immediately *)
 Qed.
 
-Lemma copy_point_ok : program_logic_goal_for_function! copy_point.
-Proof.
-  repeat straightline.
-
-  destruct p as ((((x,y),z),ta),tb).
-  destruct anything as ((((ax, ay), az), ata), atb).
-
-  single_step.
-
-  repeat single_step.
-  repeat straightline.
-  solve_mem.
-Qed.
-
 Lemma double_ok : program_logic_goal_for_function! double.
 Proof.
   (* Without this, resolution of cbv stalls out Qed. *)
   Strategy -1000 [un_xbounds bin_xbounds bin_ybounds un_square bin_mul bin_add bin_carry_add bin_sub bin_carry_sub un_outbounds bin_outbounds].
 
   straightline.
-  destruct point_relaxed as ((((fx, fy), fz), fta), ftb).
-  destruct point as (((((x, y), z), ta), tb), HP).
+  destruct a0 as ((((fx, fy), fz), fta), ftb).
+  destruct p as (((((x, y), z), ta), tb), HP).
   destruct anything as ((((ax, ay), az), ata), atb).
-  cbv beta match delta [feval_point coords_bounded_by coordinates proj1_sig] in *.
+  cbv beta match delta [feval_coords coords_bounded_by coordinates proj1_sig] in *.
   repeat straightline.
 
   assert (feval fx = x) by (inversion H13; trivial).
@@ -547,7 +412,9 @@ Proof.
   assert (feval ftb = tb) by (inversion H13; trivial).
   clear H13. (* Is there an easier way to get these equalities? Inversion kept unfolding feval :( *)
 
-  repeat single_step.
+  single_step. single_step. single_step. single_step. single_step.
+  single_step. single_step. single_step. single_step. single_step.
+  single_step. single_step. single_step.
 
   (* Solve the postconditions *)
   repeat straightline.
@@ -555,11 +422,12 @@ Proof.
   (* Now we need to convert scalar to ptsto, because straightline_dealloc can't handle scalar yet. *)
     cbv [FElem] in *.
     (* Prevent output from being rewritten by seprewrite_in *)
-    remember (Bignum.Bignum felem_size_in_words (p_point_out .+ 80) x12) as Pz in H91.
-    remember (Bignum.Bignum felem_size_in_words (p_point_out.+40) x11) as Py in H91.
-    remember (Bignum.Bignum felem_size_in_words (p_point_out) _) as Px in H91.
-    remember (Bignum.Bignum felem_size_in_words (p_point_out.+120) x8) as Pta in H91.
-    remember (Bignum.Bignum felem_size_in_words (p_point_out.+160) x6) as Ptb in H91.
+    (* TODO can I convert this to a tactic? *)
+    remember (Bignum.Bignum felem_size_in_words (p_out .+ 80) x12) as Pz in H91.
+    remember (Bignum.Bignum felem_size_in_words (p_out.+40) x11) as Py in H91.
+    remember (Bignum.Bignum felem_size_in_words (p_out.+0) x10) as Px in H91.
+    remember (Bignum.Bignum felem_size_in_words (p_out.+120) x8) as Pta in H91.
+    remember (Bignum.Bignum felem_size_in_words (p_out.+160) x6) as Ptb in H91.
     do 9 (seprewrite_in @Bignum.Bignum_to_bytes H91).
     subst Pz Py Px Pta Ptb.
     extract_ex1_and_emp_in H91.
@@ -576,6 +444,7 @@ Proof.
     congruence.
   }
   (* Safety: memory is what it should be *)
+  (* Argh, almost. This doesn't terminate. *)
   ecancel_assumption_impl.
 Qed.
 
