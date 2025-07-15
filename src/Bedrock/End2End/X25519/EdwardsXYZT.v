@@ -21,6 +21,7 @@ From coqutil.Tactics Require Import Tactics letexists eabstract rdelta reference
 Require Import coqutil.Word.Bitwidth32.
 Require Import coqutil.Word.Bitwidth.
 Require Import coqutil.Word.Interface.
+Require Import coqutil.Word.Naive.
 From Coq Require Import Init.Byte.
 From Coq Require Import List.
 From Coq Require Import String.
@@ -326,6 +327,9 @@ Local Arguments word.rep : simpl never.
 Local Arguments word.wrap : simpl never.
 Local Arguments word.unsigned : simpl never.
 Local Arguments word.of_Z : simpl never.
+Local Arguments word.add : simpl never.
+
+Local Arguments feval : simpl never.
 
 Local Ltac cbv_bounds H :=
   cbv [coords_bounded_by un_xbounds bin_xbounds bin_ybounds un_square bin_mul bin_add bin_carry_add bin_sub bin_carry_sub un_outbounds bin_outbounds] in H;
@@ -342,7 +346,7 @@ Local Ltac solve_bounds :=
 Local Ltac solve_mem :=
   repeat match goal with
   | |- exists _ : _ -> Prop, _%sep _ => eexists
-  | |- _%sep _ => ecancel_assumption_impl
+  | |- _%sep _ => ecancel_assumption
   end.
 
 Local Ltac solve_stack :=
@@ -404,33 +408,24 @@ Proof.
   destruct anything as ((((ax, ay), az), ata), atb).
   cbv beta match delta [feval_coords coords_bounded_by coordinates proj1_sig] in *.
   repeat straightline.
+  inversion H13.
 
-  assert (feval fx = x) by (inversion H13; trivial).
-  assert (feval fy = y) by (inversion H13; trivial).
-  assert (feval fz = z) by (inversion H13; trivial).
-  assert (feval fta = ta) by (inversion H13; trivial).
-  assert (feval ftb = tb) by (inversion H13; trivial).
-  clear H13. (* Is there an easier way to get these equalities? Inversion kept unfolding feval :( *)
-
-  single_step. single_step. single_step. single_step. single_step.
-  single_step. single_step. single_step. single_step. single_step.
-  single_step. single_step. single_step.
+  repeat single_step.
 
   (* Solve the postconditions *)
   repeat straightline.
 
   (* Now we need to convert scalar to ptsto, because straightline_dealloc can't handle scalar yet. *)
-    cbv [FElem] in *.
-    (* Prevent output from being rewritten by seprewrite_in *)
-    (* TODO can I convert this to a tactic? *)
-    remember (Bignum.Bignum felem_size_in_words (p_out .+ 80) x12) as Pz in H91.
-    remember (Bignum.Bignum felem_size_in_words (p_out.+40) x11) as Py in H91.
-    remember (Bignum.Bignum felem_size_in_words (p_out.+0) x10) as Px in H91.
-    remember (Bignum.Bignum felem_size_in_words (p_out.+120) x8) as Pta in H91.
-    remember (Bignum.Bignum felem_size_in_words (p_out.+160) x6) as Ptb in H91.
-    do 9 (seprewrite_in @Bignum.Bignum_to_bytes H91).
-    subst Pz Py Px Pta Ptb.
-    extract_ex1_and_emp_in H91.
+  cbv [FElem] in *.
+  (* Prevent output from being rewritten by seprewrite_in *)
+  remember (Bignum.Bignum felem_size_in_words (p_out.+80) x12) as Pz in H92.
+  remember (Bignum.Bignum felem_size_in_words (p_out.+40) x11) as Py in H92.
+  remember (Bignum.Bignum felem_size_in_words (p_out.+0) x10) as Px in H92.
+  remember (Bignum.Bignum felem_size_in_words (p_out.+120) x8) as Pta in H92.
+  remember (Bignum.Bignum felem_size_in_words (p_out.+160) x6) as Ptb in H92.
+  do 7 (seprewrite_in @Bignum.Bignum_to_bytes H92).
+  subst Pz Py Px Pta Ptb.
+  extract_ex1_and_emp_in H92.
 
   (* Solve stack/memory stuff *)
   repeat straightline.
@@ -444,8 +439,7 @@ Proof.
     congruence.
   }
   (* Safety: memory is what it should be *)
-  (* Argh, almost. This doesn't terminate. *)
-  ecancel_assumption_impl.
+  ecancel_assumption.
 Qed.
 
 Lemma add_precomputed_ok : program_logic_goal_for_function! add_precomputed.
