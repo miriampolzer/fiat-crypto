@@ -37,8 +37,9 @@ Section ExtendedCoordinates.
     Context {a_eq_minus1:a = Fopp 1}.
     (* https://hyperelliptic.org/EFD/g1p/data/twisted/extended-1/addition/madd-2008-hwcd-3,
        but with halved precomputed coordinates (making D unnecessary) *)
-    Definition m1add_precomputed_coordinates (P:F*F*F*F*F) (Q:precomputed_point) : F*F*F*F*F :=
-    let '(X1, Y1, Z1, Ta, Tb) := P in
+    (* Need to change this to return point in order to use sigma types in the specs...  let's see *)
+    Program Definition m1add_precomputed_coordinates (P:point) (Q:precomputed_point) : point :=
+    let '(X1, Y1, Z1, Ta, Tb) := coordinates P in
     let '(half_ypx, half_ymx, xyd) := Q in
     let YpX1 := Y1+X1 in
     let YmX1 := Y1-X1 in
