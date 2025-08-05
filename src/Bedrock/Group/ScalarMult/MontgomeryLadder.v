@@ -1,3 +1,4 @@
+(*
 Require Crypto.Bedrock.Group.Loops.
 Require Import Crypto.Curves.Montgomery.XZ.
 Require Import Crypto.Curves.Montgomery.XZProofs.
@@ -432,3 +433,4 @@ Local Set Printing Width 160.
 Import NotationsCustomEntry.
 *)
 Redirect "Crypto.Bedrock.Group.ScalarMult.MontgomeryLadder.montladder_body" Eval cbv [montladder_body cmd_downto_fresh cmd_downto gs fold_right] in ("montladder", montladder_body 253).
+*)

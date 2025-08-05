@@ -1,3 +1,4 @@
+(*
 Require Import Rupicola.Lib.Api. Import bedrock2.WeakestPrecondition.
 Require Import Crypto.Arithmetic.PrimeFieldTheorems.
 Require Import Crypto.Bedrock.Specs.Field.
@@ -129,7 +130,36 @@ Section __.
            implements ladderstep_gallina
                       using [mul;add;sub;square;scmula24])
          As ladderstep_correct.
-  Proof. compile. Qed.
+  Proof.
+    (* What if I redefine a tactic that will prevent it from solving the subgoal I don't want it to solve. *)
+
+    Ltac compile_step ::=
+    (* the goal that resolves ?Rout incorrectly ends up here, but not in compile_solve_side_conditions.*)
+    match goal with | |- ?g => match g with context[let _ := _ in _] => idtac g end | _ => (* matching on let fails, but I know it comes through here*)
+    first [ compile_cleanup |
+          compile_autocleanup with compiler_cleanup |
+          step_with_db compiler_cleanup |
+          compile_triple |
+          compile_solve_side_conditions ] end.
+
+    compile.
+    seprewrite FElem_from_bytes; extract_ex1_and_emp_in_goal.
+    2: { cbv match iota beta. intros. admit. }
+
+    
+    Hint Extern 1 => try seprewrite FElem_from_bytes; extract_ex1_and_emp_in_goal; cbv [FElem] in *; extract_ex1_and_emp_in_hyps; ecancel_assumption_impl : compiler.
+
+    (* this won't work, even if I teach the compiler to replace placeholder. Where is this two Placeholder goal coming from?  It seems to instantiate my frame wrongly. Looks like it maps ?Rout to Placeholder pX2. need to find out where and why *)
+    2:{}
+    Eval cbv in (spec_of_BinOp bin_add).
+    (* TODO I think I can give this a pattern, so it knows when to apply my new tactic. *)
+    2: {}
+  
+  Print HintDb compiler.
+    }
+   
+  (* TODO teach compile to resolve translation between FElem and Placeholder *)
+  Qed.
 
 End __.
 
@@ -147,4 +177,5 @@ Local Set Printing Depth 70.
    Otherwise the build breaks.
 *)
 Local Set Printing Width 140.
-Redirect "Crypto.Bedrock.Group.ScalarMult.LadderStep.ladderstep_body" Print ladderstep_body.
+(* Redirect "Crypto.Bedrock.Group.ScalarMult.LadderStep.ladderstep_body" Print ladderstep_body. *)
+*)
