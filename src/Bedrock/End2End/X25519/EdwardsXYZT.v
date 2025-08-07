@@ -416,6 +416,46 @@ Proof.
   reflexivity. (* ...and completes immediately *)
 Qed.
 
+Require Import Ltac2.Ltac2.
+
+Local Ltac2 Notation "instance_of" type(constr) :=
+  lazy_match! Ltac2.Constr.pretype (preterm:(_ : $type)) with ?instance => instance end.
+
+(* TODO prevent duplicates. *)
+Local Ltac2 rec callee_specs (cmd : constr) : constr list :=
+  match! cmd with
+    | cmd.cond _ ?c1 ?c2  => List.append (callee_specs c1) (callee_specs c2)
+    | cmd.seq ?c1 ?c2 => List.append (callee_specs c1) (callee_specs c2)
+    | cmd.while _ ?c => callee_specs c
+    | cmd.stackalloc _ _ ?c => callee_specs c
+    | cmd.call _ ?f _ => [instance_of (spec_of $f)]
+    | _ => []
+  end.
+
+Local Ltac2 rec head (t : constr) : constr :=
+  lazy_match! t with
+    | ?f _ => head f
+    | _ => t
+  end.
+
+Local Ltac2 program_logic_goal_for_function' (proc : constr) : unit := 
+  let fname := constr_string_basename_of_constr_reference (head proc) in
+  let fname_spec := instance_of (spec_of $fname) in
+  match! eval hnf in $proc with (_, ?fbody) => (* TODO is this harmless? Probably because we do cbv on f later... *)
+  let spec_implication := (fun (functions : constr) =>
+    List.fold_right (fun spec implication => '(($spec $functions) -> $implication)) (callee_specs fbody) '($fname_spec $functions)) in
+  exact (forall (functions : @map.rep _ _ Semantics.env) (EnvContains : map.get functions $fname = Some $proc),
+    ltac2:(
+      let goal := spec_implication &functions in
+      exact $goal)
+  ) end.
+
+Notation "program_logic_goal_for_function! proc" := (program_logic_goal_for proc ltac2:(
+   program_logic_goal_for_function' (Ltac2.Constr.pretype proc)))
+  (at level 10, only parsing).
+
+Set Default Proof Mode "Classic".
+
 Lemma add_precomputed_ok : program_logic_goal_for_function! add_precomputed.
 Proof.
   (* Without this, resolution of cbv stalls out Qed. *)
