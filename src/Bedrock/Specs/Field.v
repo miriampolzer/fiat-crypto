@@ -131,11 +131,11 @@ Section FunctionSpecs.
   Import WeakestPrecondition.
 
   Definition unop_spec {name} (op: UnOp name) :=
-    fnspec! name (pout px : word) / (out x : felem) Rr,
+    fnspec! name (pout px : word) / (x : felem) Rr,
     { requires tr mem :=
         bounded_by un_xbounds x
         /\ (exists Ra, (FElem px x * Ra)%sep mem)
-        /\ (FElem pout out * Rr)%sep mem;
+        /\ (Placeholder pout * Rr)%sep mem;
       ensures tr' mem' :=
         tr = tr' /\
         exists out,
@@ -153,13 +153,13 @@ Section FunctionSpecs.
       bin_outbounds: bounds }.
 
   Definition binop_spec  {name} (op: BinOp name) :=
-    fnspec! name (pout px py : word) / (out x y : felem) Rr,
+    fnspec! name (pout px py : word) / (x y : felem) Rr,
     { requires tr mem :=
         bounded_by bin_xbounds x
         /\ bounded_by bin_ybounds y
         /\ (exists Rx, (FElem px x * Rx)%sep mem)
         /\ (exists Ry, (FElem py y * Ry)%sep mem)
-        /\ (FElem pout out * Rr)%sep mem;
+        /\ (Placeholder pout * Rr)%sep mem;
       ensures tr' mem' :=
         tr = tr' /\
         exists out,
@@ -190,10 +190,10 @@ Section FunctionSpecs.
     {| un_model := F.opp; un_xbounds := tight_bounds; un_outbounds := loose_bounds |}.
 
   Instance spec_of_from_bytes : spec_of from_bytes :=
-    fnspec! from_bytes (pout px : word) / out (bs : list byte) Rr,
+    fnspec! from_bytes (pout px : word) / (bs : list byte) Rr,
     { requires tr mem :=
         (exists Ra, (array ptsto (word.of_Z 1) px bs * Ra)%sep mem)
-        /\ (FElem pout out * Rr)%sep mem
+        /\ (Placeholder pout * Rr)%sep mem
         /\ Field.bytes_in_bounds bs;
       ensures tr' mem' :=
         tr = tr' /\
@@ -201,11 +201,13 @@ Section FunctionSpecs.
              /\ bounded_by tight_bounds X
              /\ (FElem pout X * Rr)%sep mem' }.
 
+Notation EncodedPlaceholder pout :=
+  (Memory.anybytes(mem:=mem) pout (Z.of_nat encoded_felem_size_in_bytes)).
+
   Instance spec_of_to_bytes : spec_of to_bytes :=
-    fnspec! to_bytes (pout px : word) / (out : list byte) (x : felem) Rr,
+    fnspec! to_bytes (pout px : word) / (x : felem) Rr,
     { requires tr mem :=
-        (array ptsto (word.of_Z 1) pout out * Rr)%sep mem /\
-        length out = encoded_felem_size_in_bytes /\
+        (EncodedPlaceholder pout * Rr)%sep mem /\
         (exists Ra, (FElem px x * Ra)%sep mem) /\
         bounded_by tight_bounds x;
       ensures tr' mem' := tr = tr' /\
@@ -214,17 +216,17 @@ Section FunctionSpecs.
         Field.bytes_in_bounds bs }.
 
   Instance spec_of_felem_copy : spec_of felem_copy :=
-    fnspec! felem_copy (pout px : word) / (out x : felem) R,
+    fnspec! felem_copy (pout px : word) / (x : felem) R,
     { requires tr mem :=
-        (FElem px x * FElem pout out * R)%sep mem;
+        (FElem px x * Placeholder pout * R)%sep mem;
       ensures tr' mem' :=
         tr = tr' /\
         (FElem px x * FElem pout x * R)%sep mem' }.
 
   Instance spec_of_from_word : spec_of from_word :=
-    fnspec! from_word (pout x : word) / out R,
+    fnspec! from_word (pout x : word) / R,
     { requires tr mem :=
-        (FElem pout out * R)%sep mem;
+        (Placeholder pout * R)%sep mem;
       ensures tr' mem' :=
         tr = tr' /\
         exists X, feval X = F.of_Z _ (word.unsigned x)
@@ -234,10 +236,10 @@ Section FunctionSpecs.
     Local Notation bit_range := {|ZRange.lower := 0; ZRange.upper := 1|}.
 
     Instance spec_of_selectznz  : spec_of select_znz :=
-    fnspec! select_znz (pout pc px py : word) / out Rout Rx Ry x y,
+    fnspec! select_znz (pout pc px py : word) / Rout Rx Ry x y,
     {
         requires tr mem :=
-        (FElem pout out * Rout)%sep mem /\
+        (Placeholder pout * Rout)%sep mem /\
         (FElem px x * Rx)%sep mem /\
         (FElem py y * Ry)%sep mem /\
         ZRange.is_bounded_by_bool (word.unsigned pc) bit_range = true;
