@@ -67,6 +67,13 @@ Definition Placeholder
            (p : word) : mem -> Prop :=
   Memory.anybytes(mem:=mem) p felem_size_in_bytes.
 
+Definition EncodedPlaceholder
+           {field_parameters : FieldParameters}
+           {width: Z} {BW: Bitwidth width} {word: word.word width} {mem: map.map word Byte.byte}
+           {field_representation : FieldRepresentation(mem:=mem)}
+           (p : word) : mem -> Prop :=
+  (Memory.anybytes(mem:=mem) p (Z.of_nat encoded_felem_size_in_bytes)).
+
 Class FieldRepresentation_ok
       {field_parameters : FieldParameters}
       {width: Z} {BW: Bitwidth width} {word: word.word width} {mem: map.map word Byte.byte}
@@ -103,7 +110,8 @@ Section BignumToFieldRepresentationAdapterLemmas.
              end.
     { eexists; eapply Bignum_of_bytes; try eassumption.
       destruct Bitwidth.width_cases; subst width; revert H0; cbn; lia. }
-    { eapply Bignum_to_bytes in H; sepsimpl.
+    { 
+      eapply Bignum_to_bytes in H; sepsimpl.
       let H := match goal with
                | H : Array.array _ _ _ _ _ |- _ => H end in
       eapply Array.array_1_to_anybytes in H.
@@ -111,6 +119,26 @@ Section BignumToFieldRepresentationAdapterLemmas.
       rewrite H; destruct Bitwidth.width_cases as [W|W];
         symmetry in W; destruct W; cbn; clear; lia. }
   Qed.
+
+  Print Typeclasses.
+
+  Lemma FElemBytes_from_bytes p : Lift1Prop.iff1 (EncodedPlaceholder p) (Lift1Prop.ex1 (FElemBytes p)).
+  Proof.
+    cbv [EncodedPlaceholder FElemBytes Lift1Prop.ex1].
+    intro; split; intros.
+    - eapply anybytes_to_array_1 in H. inversion H. exists x0. destruct H0. extract_ex1_and_emp_in_goal.
+      ssplit.
+      + assumption.
+      + rewrite H1. rewrite Nat2Z.id. reflexivity.
+      + admitted. (* TODO what's bytes_in_bounds? And how do we use it? *)
+    - inversion H. extract_ex1_and_emp_in_hyps. apply array_1_to_anybytes in H0 as H1. exists x0. ssplit.
+       Search encoded_felem_size_in_bytes.
+      + Locate "$@". Search array. apply array1_iff_eq_of_list_word_at in H0; try assumption.
+      (* Even if we leave out proving bytes_in_bounds, we get stuck here because the premise isn't strong enough to
+         prove our array length still fits into a number. Once could ofc hack it in, but the better way forward
+         is probably to strengthen FElemBytes/bytes_in_bounds appropriately. *)
+        
+
 End BignumToFieldRepresentationAdapterLemmas.
 
 Section FunctionSpecs.
@@ -131,11 +159,11 @@ Section FunctionSpecs.
   Import WeakestPrecondition.
 
   Definition unop_spec {name} (op: UnOp name) :=
-    fnspec! name (pout px : word) / (out x : felem) Rr,
+    fnspec! name (pout px : word) / (x : felem) Rr,
     { requires tr mem :=
         bounded_by un_xbounds x
         /\ (exists Ra, (FElem px x * Ra)%sep mem)
-        /\ (FElem pout out * Rr)%sep mem;
+        /\ (Placeholder pout * Rr)%sep mem;
       ensures tr' mem' :=
         tr = tr' /\
         exists out,
@@ -153,13 +181,13 @@ Section FunctionSpecs.
       bin_outbounds: bounds }.
 
   Definition binop_spec  {name} (op: BinOp name) :=
-    fnspec! name (pout px py : word) / (out x y : felem) Rr,
+    fnspec! name (pout px py : word) / (x y : felem) Rr,
     { requires tr mem :=
         bounded_by bin_xbounds x
         /\ bounded_by bin_ybounds y
         /\ (exists Rx, (FElem px x * Rx)%sep mem)
         /\ (exists Ry, (FElem py y * Ry)%sep mem)
-        /\ (FElem pout out * Rr)%sep mem;
+        /\ (Placeholder pout * Rr)%sep mem;
       ensures tr' mem' :=
         tr = tr' /\
         exists out,
@@ -190,10 +218,10 @@ Section FunctionSpecs.
     {| un_model := F.opp; un_xbounds := tight_bounds; un_outbounds := loose_bounds |}.
 
   Instance spec_of_from_bytes : spec_of from_bytes :=
-    fnspec! from_bytes (pout px : word) / out (bs : list byte) Rr,
+    fnspec! from_bytes (pout px : word) / (bs : list byte) Rr,
     { requires tr mem :=
         (exists Ra, (array ptsto (word.of_Z 1) px bs * Ra)%sep mem)
-        /\ (FElem pout out * Rr)%sep mem
+        /\ (Placeholder pout * Rr)%sep mem
         /\ Field.bytes_in_bounds bs;
       ensures tr' mem' :=
         tr = tr' /\
@@ -202,10 +230,9 @@ Section FunctionSpecs.
              /\ (FElem pout X * Rr)%sep mem' }.
 
   Instance spec_of_to_bytes : spec_of to_bytes :=
-    fnspec! to_bytes (pout px : word) / (out : list byte) (x : felem) Rr,
+    fnspec! to_bytes (pout px : word) / (x : felem) Rr,
     { requires tr mem :=
-        (array ptsto (word.of_Z 1) pout out * Rr)%sep mem /\
-        length out = encoded_felem_size_in_bytes /\
+        (EncodedPlaceholder pout * Rr)%sep mem /\
         (exists Ra, (FElem px x * Ra)%sep mem) /\
         bounded_by tight_bounds x;
       ensures tr' mem' := tr = tr' /\
@@ -214,17 +241,17 @@ Section FunctionSpecs.
         Field.bytes_in_bounds bs }.
 
   Instance spec_of_felem_copy : spec_of felem_copy :=
-    fnspec! felem_copy (pout px : word) / (out x : felem) R,
+    fnspec! felem_copy (pout px : word) / (x : felem) R,
     { requires tr mem :=
-        (FElem px x * FElem pout out * R)%sep mem;
+        (FElem px x * Placeholder pout * R)%sep mem;
       ensures tr' mem' :=
         tr = tr' /\
         (FElem px x * FElem pout x * R)%sep mem' }.
 
   Instance spec_of_from_word : spec_of from_word :=
-    fnspec! from_word (pout x : word) / out R,
+    fnspec! from_word (pout x : word) / R,
     { requires tr mem :=
-        (FElem pout out * R)%sep mem;
+        (Placeholder pout * R)%sep mem;
       ensures tr' mem' :=
         tr = tr' /\
         exists X, feval X = F.of_Z _ (word.unsigned x)
@@ -234,10 +261,10 @@ Section FunctionSpecs.
     Local Notation bit_range := {|ZRange.lower := 0; ZRange.upper := 1|}.
 
     Instance spec_of_selectznz  : spec_of select_znz :=
-    fnspec! select_znz (pout pc px py : word) / out Rout Rx Ry x y,
+    fnspec! select_znz (pout pc px py : word) / Rout Rx Ry x y,
     {
         requires tr mem :=
-        (FElem pout out * Rout)%sep mem /\
+        (Placeholder pout * Rout)%sep mem /\
         (FElem px x * Rx)%sep mem /\
         (FElem py y * Ry)%sep mem /\
         ZRange.is_bounded_by_bool (word.unsigned pc) bit_range = true;

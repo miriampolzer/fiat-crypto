@@ -394,7 +394,8 @@ Section WithParameters.
           constr:((map word.unsigned x, (map word.unsigned y, tt))) Rr;
         translate_func_precondition_hammer.
         { (* lists_reserved_with_initial_context *)
-          lists_reserved_simplify pout; try solve_equivalence_side_conditions; solve_length out outbounds_length.
+          seprewrite_in FElem_from_bytes H4. extract_ex1_and_emp_in_hyps.
+          lists_reserved_simplify pout; try solve_equivalence_side_conditions; solve_length e outbounds_length.
           } }
       { postcondition_simplify; [ | | ]; cycle -1.
         { refine (proj1 (Proper_sep_iff1 _ _ _ _ _ _ _) _);
@@ -479,9 +480,10 @@ Section WithParameters.
         use_translate_func_correct constr:((map word.unsigned x, tt)) Rr.
         all:translate_func_precondition_hammer.
         { (* lists_reserved_with_initial_context *)
+        seprewrite_in FElem_from_bytes H2. extract_ex1_and_emp_in_hyps.
           lists_reserved_simplify pout.
           all: try solve_equivalence_side_conditions.
-          solve_length out outbounds_length. } }
+          solve_length e outbounds_length. } }
       { postcondition_simplify; [ | | ].
         { (* output correctness *)
           eapply res_eq; auto. }
@@ -561,6 +563,7 @@ Section WithParameters.
           { cbn. cbv [WeakestPrecondition.literal dlet.dlet]. rewrite word.of_Z_unsigned; trivial. }
           { eassumption. } }
         { (* lists_reserved_with_initial_context *)
+          seprewrite_in FElem_from_bytes H1. extract_ex1_and_emp_in_hyps.
           lists_reserved_simplify pout.
           all:try solve_equivalence_side_conditions.
           symmetry.
@@ -660,6 +663,7 @@ Section WithParameters.
           rewrite MakeAccessSizes.bits_per_word_eq_width.
           eapply Properties.word.unsigned_range. }
         { (* lists_reserved_with_initial_context *)
+          seprewrite_in FElem_from_bytes H1. extract_ex1_and_emp_in_hyps.
           lists_reserved_simplify pout.
           all:try solve_equivalence_side_conditions;
           seprewrite_in (FElem_array_truncated_scalar_iff1 pout) H1; extract_ex1_and_emp_in H1; try eassumption.
@@ -783,9 +787,10 @@ Section WithParameters.
             ecancel_assumption. }
           { eapply byte_unsigned_within_max_bounds; try rewrite byte_bounds_length; trivial. }
         { (* lists_reserved_with_initial_context *)
+          seprewrite_in FElem_from_bytes H1. extract_ex1_and_emp_in_hyps.
           lists_reserved_simplify pout.
           all: try solve_equivalence_side_conditions.
-          solve_length out tight_bounds_length.
+          solve_length e tight_bounds_length.
         } }
       { postcondition_simplify; [ | | ].
         { (* output correctness *)
@@ -911,6 +916,7 @@ Section WithParameters.
           compute_names; cbn [type.app_curried fst snd];
           autounfold with types list_lengths pairs;
           lists_autounfold; sepsimpl.
+          (* TODO need an anybytes lemma here. coninue here next week. *)
           exists (map byte.unsigned out).
           rewrite <-(ByteBounds.byte_map_of_Z_unsigned out) in H.
           seprewrite_in (symmetry! @Util.array_truncated_scalar_ptsto_iff1) H.

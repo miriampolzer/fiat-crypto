@@ -25,6 +25,9 @@ Section Bignum.
   Definition Bignum (n : nat) (px : word) (x : list word) : mem -> Prop :=
     sep (emp (length x = n)) (array scalar (word.of_Z k) px x).
 
+  Print scalar.
+  Print truncated_scalar.
+
   Definition EncodedBignum
              (n_bytes : nat) (px : word) (x : list Byte.byte)
     : mem -> Prop :=

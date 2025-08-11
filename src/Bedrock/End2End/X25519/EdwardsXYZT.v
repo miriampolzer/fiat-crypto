@@ -54,6 +54,8 @@ Local Existing Instance field_parameters.
 Local Instance frep25519 : Field.FieldRepresentation := field_representation n Field25519.s c.
 Local Existing Instance frep25519_ok.
 
+Locate FElem.
+
 (* Size of a field element in bytes. This is the same as computing eval in felem_size_bytes, but we want a notation instead of definition. *)
 Local Notation felem_size := 40.
 
@@ -432,6 +434,8 @@ Proof.
 
   straightline.
   destruct_points.
+
+  cbv iota match beta zeta delta [FElem Bignum.Bignum array scalar truncated_word truncated_scalar] in *.
 
   repeat single_step.
   repeat straightline.
