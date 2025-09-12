@@ -39,6 +39,7 @@ Section ExtendedCoordinates.
   Local Notation coordinates := (coordinates(F:=F)(Feq:=Feq)(Fzero:=Fzero)(Fadd:=Fadd)(Fmul:=Fmul)(a:=a)(d:=d)).
   Context {a_eq_minus1:a = Fopp 1} {twice_d} {k_eq_2d:twice_d = d+d} {nonzero_d: d<>0}.
   Local Notation m1add := (m1add(F:=F)(Feq:=Feq)(Fzero:=Fzero)(Fone:=Fone)(Fopp:=Fopp)(Fadd:=Fadd)(Fsub:=Fsub)(Fmul:=Fmul)(Finv:=Finv)(Fdiv:=Fdiv)(field:=field)(char_ge_3:=char_ge_3)(Feq_dec:=Feq_dec)(a:=a)(d:=d)(nonzero_a:=nonzero_a)(square_a:=square_a)(nonsquare_d:=nonsquare_d)(a_eq_minus1:=a_eq_minus1)(twice_d:=twice_d)(k_eq_2d:=k_eq_2d)).
+  Local Notation zero := (zero(nonzero_a:=nonzero_a)).
 
   (* Define a new cached point type *)
   Definition cached :=
@@ -133,5 +134,46 @@ Section ExtendedCoordinates.
   Lemma readd_correct P Q :
     Basic.eq (m1_readd P (m1_prep Q)) (m1add P Q).
   Proof. cbv [m1add m1_readd m1_prep]; t. Qed.
+
+(* TODO probably want this in a new scalar multiplication file, together with any other things I'll need for the proofs. *)
+
+(* This exists already in a primer file for complete curves, but for E.point. Figure out which one I want to use.*)
+Fixpoint scalarmult (n : nat) (A : point) : point :=
+    match n with
+      | 0 => zero
+      | S n => m1add (scalarmult n A) A
+    end.
+  
+  Import Coq.Lists.List ListNotations. Local Open Scope list_scope.
+
+  Fixpoint multiples (n : nat) (A : point) : list point :=
+    match n with
+      | 0 => [(scalarmult 0 A)]
+      | S n => (multiples n A) ++ [(scalarmult (S n) A)]
+    end.
+  
+  Lemma multiples_length_correct (n : nat) (A : point) :
+    Logic.eq (List.length (multiples n A)) (S n).
+  Proof.
+    induction n.
+    - cbv [multiples length]. reflexivity.
+    - unfold multiples. fold multiples. rewrite length_app.
+      rewrite IHn. simpl. Lia.lia.
+  Qed.
+
+  Import PeanoNat.
+
+  Lemma multiples_correct (n : nat) (A : point) :
+    forall k default, k <= n -> Logic.eq (List.nth k (multiples n A) default) (scalarmult k A).
+  Proof.
+    induction n.
+    - intros. assert (Logic.eq k 0%nat) by Lia.lia. subst. simpl. reflexivity.
+    - intros. unfold multiples. fold multiples. destruct (Nat.eq_dec k (S n)).
+      + subst. erewrite <- multiples_length_correct at 1.
+        eapply nth_middle.
+      + erewrite app_nth1.
+        2: { erewrite multiples_length_correct. Lia.lia. }
+        apply IHn. Lia.lia.
+  Qed.
 
 End ExtendedCoordinates.
