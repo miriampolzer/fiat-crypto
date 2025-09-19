@@ -39,6 +39,7 @@ Section ExtendedCoordinates.
   Local Notation coordinates := (coordinates(F:=F)(Feq:=Feq)(Fzero:=Fzero)(Fadd:=Fadd)(Fmul:=Fmul)(a:=a)(d:=d)).
   Context {a_eq_minus1:a = Fopp 1} {twice_d} {k_eq_2d:twice_d = d+d} {nonzero_d: d<>0}.
   Local Notation m1add := (m1add(F:=F)(Feq:=Feq)(Fzero:=Fzero)(Fone:=Fone)(Fopp:=Fopp)(Fadd:=Fadd)(Fsub:=Fsub)(Fmul:=Fmul)(Finv:=Finv)(Fdiv:=Fdiv)(field:=field)(char_ge_3:=char_ge_3)(Feq_dec:=Feq_dec)(a:=a)(d:=d)(nonzero_a:=nonzero_a)(square_a:=square_a)(nonsquare_d:=nonsquare_d)(a_eq_minus1:=a_eq_minus1)(twice_d:=twice_d)(k_eq_2d:=k_eq_2d)).
+  Local Notation zero := (zero(nonzero_a:=nonzero_a)).
 
   (* Define a new cached point type *)
   Definition cached :=
@@ -133,5 +134,95 @@ Section ExtendedCoordinates.
   Lemma readd_correct P Q :
     Basic.eq (m1_readd P (m1_prep Q)) (m1add P Q).
   Proof. cbv [m1add m1_readd m1_prep]; t. Qed.
+
+(* TODO probably want this in a new scalar multiplication file, together with any other things I'll need for the proofs. *)
+Import PeanoNat.
+
+(* This exists already in a primer file for complete curves, but for E.point. Figure out which one I want to use.*)
+Fixpoint scalarmult (n : nat) (A : point) : point :=
+    match n with
+      | 0 => zero
+      | S n => m1add (scalarmult n A) A
+    end.
+  
+  Import Coq.Lists.List ListNotations. Local Open Scope list_scope.
+
+  (* Creates 0..(n-1)*A *)
+  Fixpoint multiples (n : nat) (A : point) : list point :=
+    match n with
+      | 0 => []
+      | S n => (multiples n A) ++ [(scalarmult n A)]
+    end.
+  
+  Lemma length_multiples (n : nat) (A : point) :
+    Logic.eq (List.length (multiples n A)) n.
+  Proof.
+    induction n.
+    - cbv [multiples length]. reflexivity.
+    - unfold multiples. fold multiples. rewrite length_app.
+      rewrite IHn. simpl. Lia.lia.
+  Qed.
+
+
+  Lemma multiples_correct (n : nat) (A : point) :
+    forall k default, k < n -> Logic.eq (List.nth k (multiples n A) default) (scalarmult k A).
+  Proof.
+    destruct n. intros. apply Nat.nlt_0_r in H. contradiction.
+    induction n.
+    - intros. assert (Logic.eq k 0%nat) by Lia.lia. subst. simpl. reflexivity.
+    - intros. unfold multiples. fold multiples. destruct (Nat.eq_dec k (S n)).
+      + subst. erewrite <- length_multiples at 1.
+        eapply nth_middle.
+      + erewrite app_nth1.
+        2: { rewrite length_app. erewrite length_multiples. simpl. Lia.lia. }
+        apply IHn. Lia.lia. 
+  Qed.
+
+
+  (* didn't need those*)
+  Lemma multiples_app_index (n : nat) (A : point) :
+    forall i, i < n -> Logic.eq (multiples n A) ((firstn i (multiples n A)) ++ [scalarmult i A] ++ skipn (i + 1) (multiples n A)).
+  Proof.
+    intros.
+    eapply (nth_ext). Unshelve. 3,4: exact A.
+    - rewrite length_app, length_firstn, length_app, length_skipn, length_multiples. simpl. Lia.lia.
+    - rewrite length_multiples. 
+      intros. destruct (dec (n0 < i)).
+      + rewrite app_nth1. 2: { rewrite length_firstn, length_multiples. Lia.lia. }
+        rewrite nth_firstn. replace (n0 <? i) with true.
+        2:{ symmetry. rewrite Nat.ltb_lt. assumption. }
+        reflexivity.
+      + rewrite app_nth2. 2: { rewrite length_firstn, length_multiples. Lia.lia. } destruct (dec (n0 > i)).
+        * rewrite app_nth2. 2: {rewrite length_firstn, length_multiples. simpl. Lia.lia. }
+          rewrite nth_skipn, length_firstn, length_multiples. simpl.
+          replace ((i + 1 + (n0 - Init.Nat.min i n - 1))%nat) with n0.
+          2: {Lia.lia. } reflexivity.
+        * assert (Logic.eq i n0)%nat by Lia.lia.
+          rewrite app_nth1. 2: { rewrite length_firstn, length_multiples. simpl. Lia.lia. }
+          rewrite length_firstn, length_multiples. replace (n0 - Init.Nat.min i n)%nat with 0%nat.
+          rewrite multiples_correct. simpl. subst. reflexivity.
+          assumption. Lia.lia.
+  Qed. 
+
+  Lemma firstn_multiples (n : nat) (A : point) :
+    forall k, Logic.eq (firstn k (multiples n A)) (multiples (min k n) A).
+  Proof.
+    intros k.
+    eapply (nth_ext). Unshelve. 3,4: exact A.
+    - rewrite length_firstn, !length_multiples. Lia.lia.
+    - rewrite length_firstn, !length_multiples. intros ? ?. rewrite nth_firstn. 
+      rewrite !multiples_correct ; try Lia.lia.
+      replace (n0 <? k) with true.
+      2:{ symmetry. rewrite Nat.ltb_lt. Lia.lia. }
+      reflexivity.
+  Qed.
+
+  Lemma applast_multiples (n : nat) (A : point) :
+    n > 0 -> Logic.eq (multiples n A) ((multiples (n - 1) A) ++ [scalarmult (n - 1) A]).
+  Proof.
+    destruct n. intros. apply Nat.nlt_0_r in H. contradiction.
+    intros. replace (S n - 1)%nat with n by Lia.lia.
+    simpl. reflexivity.
+  Qed.  
 
 End ExtendedCoordinates.
