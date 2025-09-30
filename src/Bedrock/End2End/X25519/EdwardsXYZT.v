@@ -33,6 +33,7 @@ Require Import Crypto.Bedrock.Field.Synthesis.New.UnsaturatedSolinas.
 Require Import Crypto.Bedrock.End2End.X25519.Field25519.
 Require Import Crypto.Bedrock.Specs.Field.
 Require Import Crypto.Spec.Curve25519.
+Require Import Crypto.Spec.CompleteEdwardsCurve.
 Require Import Crypto.Util.Decidable.
 Require Import Crypto.Util.Tactics.DestructHead.
 Require Import Curves.Edwards.XYZT.Basic.
@@ -173,15 +174,20 @@ Section WithParameters.
 
 Local Notation "m =* P" := ((P%sep) m) (at level 70, only parsing).
 
+Local Notation Eadd := (E.add (nonzero_a:=nonzero_a)(square_a:=square_a)(nonsquare_d:=nonsquare_d)(a:=a)(d:=d)).
 Local Notation FElem := (FElem(FieldRepresentation:=frep25519)).
 Local Notation felem_size_in_bytes := (felem_size_in_bytes(FieldRepresentation:=frep25519)).
 Local Notation bounded_by := (bounded_by(FieldRepresentation:=frep25519)).
 Local Notation word := (Naive.word 32).
 Local Notation felem := (felem(FieldRepresentation:=frep25519)).
-Local Notation point := (point(Feq:=Logic.eq)(Fzero:=F.zero)(Fadd:=F.add)(Fmul:=F.mul)(a:=a)(d:=d)).
-Local Notation cached := (cached(Fzero:=F.zero)(Fadd:=F.add)(Fmul:=F.mul)(a:=a)(d:=d)).
+Local Notation projective_point := (point(Feq:=Logic.eq)(Fzero:=F.zero)(Fadd:=F.add)(Fmul:=F.mul)(a:=a)(d:=d)).
+Local Notation point := (E.point (Feq:=Logic.eq)(Fone:=F.one)(Fadd:=F.add)(Fmul:=F.mul)(a:=a)(d:=d)).
+Local Notation to_twisted := (to_twisted(nonzero_a:=nonzero_a)(a_eq_minus1:=a_eq_minus1)(twice_d:=twice_d)(nonzero_d:=nonzero_d)(k_eq_2d:=k_eq_2d)).
+Local Notation from_twisted := (from_twisted(nonzero_a:=nonzero_a)).
+Local Notation cached_point := (cached(Fzero:=F.zero)(Fadd:=F.add)(Fmul:=F.mul)(a:=a)(d:=d)).
 Local Notation coordinates := (coordinates(Fzero:=F.zero)(Fadd:=F.add)(Fmul:=F.mul)(Feq:=Logic.eq)(a:=a)(d:=d)).
 Local Notation cached_coordinates := (cached_coordinates(Fzero:=F.zero)(Fadd:=F.add)(Fdiv:=F.div)(Fmul:=F.mul)(Fsub:=F.sub)(Feq:=Logic.eq)(a:=a)(d:=d)).
+Local Notation cached_to_twisted := (cached_to_twisted(nonzero_a:=nonzero_a)(a_eq_minus1:=a_eq_minus1)(twice_d:=twice_d)(k_eq_2d:=k_eq_2d)(nonzero_d:=nonzero_d)).
 Local Notation precomputed_coordinates := (precomputed_coordinates(Fone:=F.one)(Fadd:=F.add)(Fmul:=F.mul)(Fsub:=F.sub)(Feq:=Logic.eq)(a:=a)(d:=d)).
 Local Notation m1double :=
   (m1double(F:=F M_pos)(Feq:=Logic.eq)(Fzero:=F.zero)(Fone:=F.one)
@@ -210,26 +216,40 @@ Local Notation m1add_precomputed_coordinates :=
 
 Local Notation "p .+ n" := (word.add p (word.of_Z n)) (at level 50, format "p .+ n", left associativity).
 
-Definition projective_repr P := { p | let '(x,y,z,ta,tb) := p in
-                            coordinates P = (feval x, feval y, feval z, feval ta, feval tb) /\
+(* todo move over to the gallina files if this works - probably requries some proofs. *)
+Definition projective_to_twisted (coords : (F M_pos * F M_pos * F M_pos * F M_pos * F M_pos)) : (F M_pos * F M_pos) :=
+    let '(x,y,z,_,_) := coords in let iZ := F.inv z in ((x*iZ)%F, (y*iZ)%F).
+
+(* projective P contains all projective representations that stand for the curve point P. *)
+Definition projective (P : point) := { coords |
+                            let '(x,y,z,ta,tb) := coords in
+                            projective_to_twisted (feval x, feval y, feval z, feval ta, feval tb) = proj1_sig P /\ 
                             bounded_by tight_bounds x /\ bounded_by tight_bounds y /\ bounded_by tight_bounds z /\
-                              bounded_by loose_bounds ta /\ bounded_by loose_bounds tb }.
-Local Notation "c 'p5@' p" := (let '(x,y,z,ta,tb) := proj1_sig c in sep (sep (sep (sep (FElem (p) x) (FElem (p .+ felem_size) y))
+                            bounded_by loose_bounds ta /\ bounded_by loose_bounds tb }.
+
+Local Notation "c 'projective@' p" := (let '(x,y,z,ta,tb) := proj1_sig c in sep (sep (sep (sep (FElem (p) x) (FElem (p .+ felem_size) y))
                               (FElem (p .+ (felem_size + felem_size)) z)) (FElem (p .+ (felem_size + felem_size + felem_size)) ta))
-                              (FElem (p .+ (felem_size + felem_size + felem_size + felem_size)) tb)) (at level 10, format "c 'p5@' p").
+                              (FElem (p .+ (felem_size + felem_size + felem_size + felem_size)) tb)) (at level 10, format "c 'projective@' p").
 
-
+(*
 Definition precomputed_repr (P : precomputed_point) := { p | let '(half_ymx, half_ypx, xyd) := p in
                             precomputed_coordinates P = (feval half_ymx, feval half_ypx, feval xyd) /\
                             bounded_by loose_bounds half_ymx /\ bounded_by loose_bounds half_ypx /\ bounded_by loose_bounds xyd }.
 Local Notation "c 'p3@' p" := (let '(half_ymx, half_ypx, xyd) := proj1_sig c in sep (sep (FElem (p) half_ymx) (FElem (p .+ felem_size) half_ypx))
                               (FElem (p .+ (felem_size + felem_size)) xyd)) (at level 10, format "c 'p3@' p").
+*)
 
-Definition cached_repr (P : cached) := { p | let '(half_ymx, half_ypx,z,td) := p in
-                            cached_coordinates P = (feval half_ymx, feval half_ypx, feval z, feval td) /\
+Definition cached_to_twisted_coords (coords : (F M_pos * F M_pos * F M_pos * F M_pos)) : (F M_pos * F M_pos) :=
+    let '(half_ymx, half_ypx,z,_) := coords in
+    let iZ := F.inv z in (((half_ypx-half_ymx)*iZ), ((half_ypx+half_ymx)*iZ))%F.
+
+(* cached P contains all cached representations that stand for the curve point P. *)
+Definition cached (P : point) := { coords |
+                            let '(half_ymx, half_ypx,z,td) := coords in
+                            cached_to_twisted_coords (feval half_ymx, feval half_ypx, feval z, feval td) = proj1_sig P /\
                             bounded_by loose_bounds half_ymx /\ bounded_by loose_bounds half_ypx /\bounded_by loose_bounds z /\ bounded_by loose_bounds td }.
-Local Notation "c 'p4@' p" := (let '(half_ymx, half_ypx,z,td) := proj1_sig c in sep (sep (sep (FElem (p) half_ymx) (FElem (p .+ felem_size) half_ypx))
-                              (FElem (p .+ (felem_size + felem_size)) z)) (FElem (p .+ (felem_size + felem_size + felem_size)) td)) (at level 10, format "c 'p4@' p").
+Local Notation "c 'cached@' p" := (let '(half_ymx, half_ypx,z,td) := proj1_sig c in sep (sep (sep (FElem (p) half_ymx) (FElem (p .+ felem_size) half_ypx))
+                              (FElem (p .+ (felem_size + felem_size)) z)) (FElem (p .+ (felem_size + felem_size + felem_size)) td)) (at level 10, format "c 'cached@' p").
 
 Instance spec_of_fe25519_half : spec_of "fe25519_half" :=
   fnspec! "fe25519_half"
@@ -246,9 +266,10 @@ Instance spec_of_fe25519_half : spec_of "fe25519_half" :=
         feval result = F.div (feval input) (F.add F.one F.one) /\
         m' =* (FElem result_location result)  * R}.
 
+        (*
 Global Instance spec_of_add_precomputed : spec_of "add_precomputed" :=
   fnspec! "add_precomputed"
-    (p_out p_a p_b: word) / (a: point) (b: precomputed_point) (a_repr: projective_repr a) (b_repr: precomputed_repr b) (out : list byte) (R: _ -> Prop), {
+    (p_out p_a p_b: word) / (a b : E.point) (b: precomputed_point) (a_repr: projective_repr a) (b_repr: precomputed_repr b) (out : list byte) (R: _ -> Prop), {
       requires t m :=
         m =* out $@ p_out * a_repr p5@ p_a * b_repr p3@ p_b * R/\
         Datatypes.length out = Z.to_nat (5 * felem_size);
@@ -257,19 +278,21 @@ Global Instance spec_of_add_precomputed : spec_of "add_precomputed" :=
         exists a_plus_b : projective_repr (m1add_precomputed_coordinates a b),
           m' =* a_plus_b p5@ p_out * a_repr p5@ p_a * b_repr p3@ p_b * R
     }.
+    *)
 Global Instance spec_of_double : spec_of "double" :=
   fnspec! "double"
     (p_out p_a: word) /
-    (a: point) (a_repr: projective_repr a) (out : list byte) (R: _ -> Prop), {
+    (a: point) (a_rep: projective a) (out : list byte) (R: _ -> Prop), {
       requires t m :=
-        m =* out $@ p_out * a_repr p5@ p_a * R /\
+        m =* out $@ p_out * a_rep projective@ p_a * R /\
         Datatypes.length out = Z.to_nat (5 * felem_size);
       ensures t' m' := 
         t = t' /\
-        exists a_double: projective_repr (m1double a),
-          m' =* a_double p5@ p_out * a_repr p5@ p_a * R
+        exists a_double: projective (Eadd a a),
+          m' =* a_double projective@ p_out * a_rep projective@ p_a * R
     }.
 
+    (*
 Global Instance spec_of_to_cached: spec_of "to_cached" :=
   fnspec! "to_cached"
     (p_out p_a p_d: word) /
@@ -297,7 +320,7 @@ Global Instance spec_of_readd : spec_of "readd" :=
         exists a_plus_c: projective_repr (m1_readd a c),
           m' =* a_plus_c p5@ p_out * a_repr p5@ p_a * c_repr p4@ p_c * R
   }.
-
+*)
 Local Instance spec_of_fe25519_square : spec_of "fe25519_square" := Field.spec_of_UnOp un_square.
 Local Instance spec_of_fe25519_mul : spec_of "fe25519_mul" := Field.spec_of_BinOp bin_mul.
 Local Instance spec_of_fe25519_add : spec_of "fe25519_add" := Field.spec_of_BinOp bin_add.
@@ -317,15 +340,16 @@ Local Arguments feval : simpl never.
 
 Local Ltac destruct_points :=
   repeat match goal with
+    | _ => progress destruct_head' E.point
     | _ => progress destruct_head' @Readdition.cached
-    | _ => progress destruct_head' cached_repr
+    | _ => progress destruct_head' cached
     | _ => progress destruct_head' @Basic.point
-    | _ => progress destruct_head' projective_repr
+    | _ => progress destruct_head' projective
     | _ => progress destruct_head' @precomputed_point
-    | _ => progress destruct_head' precomputed_repr
+    (*| _ => progress destruct_head' precomputed*)
     | _ => progress destruct_head' prod
     | _ => progress destruct_head' and
-    | _ => progress lazy beta match zeta delta [coordinates precomputed_coordinates cached_coordinates proj1_sig] in *
+    | _ => progress lazy beta match zeta delta [to_twisted E.coordinates snd fst E.eq coordinates precomputed_coordinates cached_coordinates proj1_sig] in *
   end.
 
 Local Ltac cbv_bounds H :=
@@ -391,6 +415,33 @@ Ltac split_output_stack stack_var ptr_var num_points :=
     end
   end.
 
+
+Lemma double_ok : program_logic_goal_for_function! double.
+Proof.
+  (* Without this, resolution of cbv stalls out Qed. *)
+  Strategy -1000 [un_xbounds bin_xbounds bin_ybounds un_square bin_mul bin_add bin_carry_add bin_sub bin_carry_sub un_outbounds bin_outbounds].
+
+  do 3 straightline.
+
+  destruct_points.
+  split_output_stack out p_out 5.
+  repeat straightline.
+
+  repeat single_step.
+
+  (* Solve the postconditions *)
+  repeat straightline.
+  solve_deallocation.
+  lazy [projective_to_twisted E.coordinates snd fst to_twisted from_twisted projective coordinates proj1_sig m1double bin_model bin_add bin_mul bin_sub bin_carry_add bin_sub bin_carry_sub un_model un_square] in *.
+  unshelve eexists.
+  eexists (_, _, _, _, _).
+  2: solve_mem. ssplit; try solve_bounds.
+  rewrite F.pow_2_r in *.
+  Prod.inversion_prod.
+  lazy [Eadd E.coordinates].
+  Field.fsatz. (* probably don't want to unfold Eadd, but have some lemmas that bring this back to what's needed*)
+Qed.
+
 Lemma to_cached_ok: program_logic_goal_for_function! to_cached.
 Proof.
   (* Without this, resolution of cbv stalls out Qed. *)
@@ -434,30 +485,6 @@ Proof.
   2: solve_mem.
   ssplit; try solve_bounds.
   lazy [bin_model bin_add bin_mul bin_sub] in *. congruence.
-Qed.
-
-Lemma double_ok : program_logic_goal_for_function! double.
-Proof.
-  (* Without this, resolution of cbv stalls out Qed. *)
-  Strategy -1000 [un_xbounds bin_xbounds bin_ybounds un_square bin_mul bin_add bin_carry_add bin_sub bin_carry_sub un_outbounds bin_outbounds].
-
-  do 3 straightline.
-  destruct_points.
-  split_output_stack out p_out 5.
-  repeat straightline.
-
-  repeat single_step.
-
-  (* Solve the postconditions *)
-  repeat straightline.
-  solve_deallocation.
-  lazy beta match zeta delta [projective_repr coordinates proj1_sig m1double bin_model bin_add bin_mul bin_sub bin_carry_add bin_sub bin_carry_sub un_model un_square] in *.
-  unshelve eexists.
-  eexists (_, _, _, _, _).
-  2: solve_mem.
-  ssplit; try solve_bounds.
-  rewrite F.pow_2_r in *.
-  Prod.inversion_prod. congruence.
 Qed.
 
 Lemma readd_ok : program_logic_goal_for_function! readd.
