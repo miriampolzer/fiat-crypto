@@ -113,6 +113,12 @@ Section ExtendedCoordinates.
       end; t.
     Qed.
 
+    Global Instance Proper_m1add : Proper (eq==>eq==>eq) m1add.
+    Proof using Type.
+      intros ? ? ? ? ? ?.
+      cbv [m1add]; t.
+    Qed.
+
     Global Instance isomorphic_commutative_group_m1 :
       @Group.isomorphic_commutative_groups
         Epoint E.eq
@@ -158,6 +164,12 @@ Section ExtendedCoordinates.
       end; t.
     Qed.
 
+    Global Instance Proper_m1double : Proper (eq==>eq) m1double.
+    Proof using Type.
+      intros ? ? ?.
+      cbv [m1double]; t.
+    Qed.
+
     Lemma m1double_correct P : eq (m1double P) (m1add P P).
     Proof. intros; progress destruct_head' @point; cbv [m1add m1double]; t. Qed.
 
@@ -191,6 +203,12 @@ Section ExtendedCoordinates.
     | [ |- context [let (_, _) := coordinates ?P in _] ]
       => pose proof (E.denominator_nonzero _ nonzero_a square_a _ nonsquare_d _ _ (proj2_sig (to_twisted P))  _ _  (proj2_sig (to_twisted P)))
     end; t.
+  Qed.
+
+  Global Instance Proper_double : Proper (eq==>eq) double.
+  Proof using Type.
+    intros ? ? ?.
+    cbv [double]; t.
   Qed.
 
   Lemma to_twisted_double P : E.eq (to_twisted (double P)) (Eadd (to_twisted P) (to_twisted P)).
