@@ -68,6 +68,9 @@ Section ScalarMultProperties.
     intros. change 1 with (Z.succ 0).
     rewrite scalarmult_succ_l, scalarmult_0_l, right_identity; reflexivity.
   Qed.
+  
+  Lemma scalarmult_2_l P : 2*P = P+P.
+Admitted.
 
   Lemma scalarmult_opp1_l P : -1*P = opp P.
     change (-1) with (Z.pred 0).
