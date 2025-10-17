@@ -585,13 +585,18 @@ Section __.
         <{ pred (nlet_eq [lhs_var; rhs_var] v k) }>.
   Proof using ext_spec_ok locals_ok mem_ok word_ok.
     unfold FElem, Field.FElem.
-    rewrite !Bignum_as_array.
     repeat straightline' locals.
     sepsimpl.
     straightline_call.
     ssplit.
     { destruct swap; simpl; intuition fail. }
-    ecancel_assumption.
+    { cbv [sizedlistarray_value]. sepsimpl. 3: {
+        cbv [listarray_value]. simpl. 
+        rewrite Z2Nat.id; [|unfold bytes_per_word; pose proof z_lt_width; ZnWords].
+        ecancel_assumption.
+      }
+      all: assumption.
+    }
     repeat straightline' l.
     apply H4.
     sepsimpl.
@@ -601,62 +606,35 @@ Section __.
       instantiate (1 := P2.car (cswap swap x x0)).
       destruct swap; assumption.
     }
-    destruct swap; assumption.
+    1,2 : destruct swap; assumption.
     eexists.
     sepsimpl.
     {
       instantiate (1 := P2.cdr (cswap swap x x0)).
       destruct swap; assumption.
     }
-    destruct swap; assumption.
-    rewrite cswap_low_combine_eq in H11.
-    assert (felem_size_in_words = length x
-            /\ felem_size_in_words = length x0).
-    {
-      clear H11 H4 a0.
-      unfold sizedlistarray_value in H7; sepsimpl; auto.
-      seprewrite_in (sep_emp_2 R) H7.
-      sepsimpl.
-      auto.
-    }
-    destruct H9.
-    rewrite cswap_combine_eq in H11;
+    1,2: destruct swap; assumption.
+    rewrite cswap_low_combine_eq in H13; try lia.
+    (* destruct H13. *)
+    rewrite cswap_combine_eq in H13;
       try intuition congruence;
       try solve [destruct swap; intuition congruence];[].
-    replace ((word.eqb (word.of_Z (Z.b2z swap)) (word.of_Z 1))) with swap in H11.
-    unfold dlet in H11.
-    use_sep_assumption.
-    cancel.
-    apply sep_comm.
+    replace ((word.eqb (word.of_Z (Z.b2z swap)) (word.of_Z 1))) with swap in H13.
+    unfold dlet in H13.
+    { cbv [sizedlistarray_value] in *. sepsimpl.
+        cbv [listarray_value] in *. simpl in *. 
+        rewrite Z2Nat.id in *; [|unfold bytes_per_word; pose proof z_lt_width; ZnWords].
+        ecancel_assumption.
+      }
     {
       destruct swap; simpl;
         [ rewrite word.eqb_eq | rewrite word.eqb_ne ];
         try reflexivity.
       intro.
       pose proof word.unsigned_of_Z_1.
-      rewrite <- H12 in H13.
-      rewrite word.unsigned_of_Z_0 in H13.
+      rewrite <- H11 in H12. 
+      rewrite word.unsigned_of_Z_0 in H12.
       lia.
-    }
-    {
-      assert (Datatypes.length x0 = felem_size_in_words) as Heqsz;[|rewrite Heqsz; clear Heqsz].
-      {
-        revert H7.
-        unfold sizedlistarray_value.
-        intros; sepsimpl.
-        intuition.
-      }
-      assert (Datatypes.length x = felem_size_in_words) as Heqsz;[|apply Heqsz].
-      {
-        revert H7.
-        unfold sizedlistarray_value.
-        intros.
-        sepsimpl.
-        intuition.
-        repeat destruct H9 as [? H9].
-        sepsimpl.
-        assumption.
-      }
     }
   Qed.
   Hint Resolve compile_felem_cswap : compiler.

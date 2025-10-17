@@ -1,4 +1,5 @@
 Require Import bedrock2.Array.
+Require Import bedrock2.ArrayCasts.
 Require Import bedrock2.bottom_up_simpl.
 Require Import bedrock2.FE310CSemantics.
 Require Import bedrock2.Loops.
@@ -13,6 +14,7 @@ Require Import bedrock2.Syntax.
 Require Import bedrock2.WeakestPrecondition.
 Require Import bedrock2.WeakestPreconditionProperties.
 Require Import bedrock2.ZnWords.
+From bedrock2Examples Require Import memcpy.
 Require Import compiler.MMIO.
 Require Import compiler.Pipeline.
 Require Import compiler.Symbols.
@@ -51,8 +53,13 @@ Local Existing Instance field_parameters.
 Local Existing Instance frep25519.
 Local Existing Instance frep25519_ok.
 
+Local Notation bytes_per_word := 4%nat.
 (* Size of a field element in bytes. This is the same as computing eval in felem_size_bytes, but we want a notation instead of definition. *)
 Local Notation felem_size := 40.
+(* Size of a projective point in bytes (5*40). *)
+Local Notation pp_size := 200.
+(* Size of a cached point in bytes (4*40). *)
+Local Notation cp_size := 160.
 
 (* Notations help treat curve points like C structs. To avoid notation clashes, projective coordinates are capitalized. *)
 
@@ -73,6 +80,24 @@ Local Notation "A .half_YmX" := (A) (in custom bedrock_expr at level 2, left ass
 Local Notation "A .half_YpX" := (expr.op Syntax.bopname.add A (felem_size)) (in custom bedrock_expr at level 2, left associativity, only parsing).
 Local Notation "A .Z" := (expr.op Syntax.bopname.add A (felem_size + felem_size)) (in custom bedrock_expr at level 2, left associativity, only parsing).
 Local Notation "A .Td" := (expr.op Syntax.bopname.add A (felem_size + felem_size + felem_size)) (in custom bedrock_expr at level 2, left associativity, only parsing).
+
+Definition copy_projective_coords := func! (p_out, p_in) {
+  br_memcpy(p_out, p_in, $pp_size)
+}.
+
+Definition zero_projective_coords := func! (p_zero) {
+  fe25519_from_word(p_zero.X, $0);
+  fe25519_from_word(p_zero.Y, $1);
+  fe25519_from_word(p_zero.Z, $1);
+  fe25519_from_word(p_zero.Ta, $0);
+  fe25519_from_word(p_zero.Tb, $1)
+}.
+
+Definition zero_cached_coords := func! (p_zero, p_d) {
+  stackalloc pp_size as p_zero_projective;
+  zero_projective_coords(p_zero_projective);
+  to_cached(p_zero, p_zero_projective, p_d)
+}.
 
 (* Adds a precomputed point p_b to projective point p_a and puts the result in p_out. *)
 Definition add_precomputed := func! (p_out, p_a, p_b) {
@@ -188,6 +213,7 @@ Local Notation cached_coordinates := (cached_coordinates(Fzero:=F.zero)(Fadd:=F.
   (Fmul:=F.mul)(Fsub:=F.sub)(Feq:=Logic.eq)(a:=a)(d:=d)).
 Local Notation precomputed_coordinates := (precomputed_coordinates(Fone:=F.one)(Fadd:=F.add)
   (Fmul:=F.mul)(Fsub:=F.sub)(Feq:=Logic.eq)(a:=a)(d:=d)).
+Local Notation zero := (Extended.zero(nonzero_a:=nonzero_a)(d:=d)).
 Local Notation m1double :=
   (Extended.m1double(F:=F M_pos)(Feq:=Logic.eq)(Fzero:=F.zero)(Fone:=F.one)
            (Fopp:=F.opp)(Fadd:=F.add)(Fsub:=F.sub)(Fmul:=F.mul)(Finv:=F.inv)(Fdiv:=F.div)
@@ -225,6 +251,11 @@ Definition valid_projective_coords X Y Z Ta Tb :=
     ((feval Z) <> 0)%F).
 Definition projective_coords := { c | let '(X,Y,Z,Ta,Tb) := c in
     valid_projective_coords X Y Z Ta Tb /\
+    Datatypes.length X = felem_size_in_words /\
+    Datatypes.length Y = felem_size_in_words /\
+    Datatypes.length Z = felem_size_in_words /\
+    Datatypes.length Ta = felem_size_in_words /\
+    Datatypes.length Tb = felem_size_in_words /\
     bounded_by tight_bounds X /\ bounded_by tight_bounds Y /\ bounded_by tight_bounds Z /\
     bounded_by loose_bounds Ta /\ bounded_by loose_bounds Tb }.
 Definition feval_projective_coords (c : projective_coords) :=
@@ -249,6 +280,9 @@ Definition valid_precomputed_coords half_ypx half_ymx xyd :=
     /\ (feval xyd) = x * y * d.
 Definition precomputed_coords := { c | let '(half_ypx, half_ymx, xyd) := c in
                             valid_precomputed_coords half_ypx half_ymx xyd /\
+                            Datatypes.length half_ypx = felem_size_in_words /\
+                            Datatypes.length half_ymx = felem_size_in_words /\
+                            Datatypes.length xyd = felem_size_in_words /\
                             bounded_by loose_bounds half_ymx /\ bounded_by loose_bounds half_ypx /\
                             bounded_by loose_bounds xyd }.
 Definition feval_precomputed_coords (c : precomputed_coords) :=
@@ -276,6 +310,10 @@ Definition valid_cached_coords half_YmX half_YpX Z Td :=
     Z <> 0.
 Definition cached_coords := { c | let '(half_YmX, half_YpX, Z, Td) := c in
                             valid_cached_coords half_YmX half_YpX Z Td /\
+                            Datatypes.length half_YmX = felem_size_in_words /\
+                            Datatypes.length half_YpX = felem_size_in_words /\
+                            Datatypes.length Z = felem_size_in_words /\
+                            Datatypes.length Td = felem_size_in_words /\
                             bounded_by loose_bounds half_YmX /\ bounded_by loose_bounds half_YpX /\
                             bounded_by loose_bounds Z /\ bounded_by loose_bounds Td }.
 Definition feval_cached_coords (c : cached_coords) :=
@@ -295,26 +333,78 @@ Lemma cached_implies_coords_valid (c : cached) (half_YmX half_YpX Z Td : felem):
 Qed.
 
 (* Extended projective points. *)
-Local Notation "c 'p5@' p" := (let '(X,Y,Z,Ta,Tb) := proj1_sig c in sep (sep (sep (sep
+Definition p5at p (c : projective_coords) := (let '(X,Y,Z,Ta,Tb) := proj1_sig c in sep (sep (sep (sep
                               (FElem (p) X)
                               (FElem (p .+ felem_size) Y))
                               (FElem (p .+ (felem_size + felem_size)) Z))
                               (FElem (p .+ (felem_size + felem_size + felem_size)) Ta))
-                              (FElem (p .+ (felem_size + felem_size + felem_size + felem_size)) Tb))
-                              (at level 10, format "c 'p5@' p").
+                              (FElem (p .+ (felem_size + felem_size + felem_size + felem_size)) Tb)).
 (* Cached points. *)
-Local Notation "c 'p4@' p" := (let '(half_ymx, half_ypx ,z,td) := proj1_sig c in sep (sep (sep
+Definition p4at p (c : cached_coords) := (let '(half_ymx, half_ypx ,z,td) := proj1_sig c in sep (sep (sep
                               (FElem (p) half_ymx)
                               (FElem (p .+ felem_size) half_ypx))
                               (FElem (p .+ (felem_size + felem_size)) z))
-                              (FElem (p .+ (felem_size + felem_size + felem_size)) td))
-                              (at level 10, format "c 'p4@' p").
+                              (FElem (p .+ (felem_size + felem_size + felem_size)) td)).
 (* Precomputed points. *)
-Local Notation "c 'p3@' p" := (let '(half_ymx, half_ypx, xyd) := proj1_sig c in sep (sep 
+Definition p3at p (c : precomputed_coords) := let '(half_ymx, half_ypx, xyd) := proj1_sig c in sep (sep 
                               (FElem (p) half_ymx)
                               (FElem (p .+ felem_size) half_ypx))
-                              (FElem (p .+ (felem_size + felem_size)) xyd))
-                              (at level 10, format "c 'p3@' p").
+                              (FElem (p .+ (felem_size + felem_size)) xyd).
+
+Local Ltac destruct_points :=
+  repeat match goal with
+    | _ => progress destruct_head' projective_coords
+    | _ => progress destruct_head' precomputed_coords
+    | _ => progress destruct_head' cached_coords
+    | _ => progress destruct_head' prod
+    | _ => progress destruct_head' and
+    | _ => progress cbv [p5at p4at p3at precomputed_coordinates cached_coordinates proj1_sig feval_projective_coords] in *
+  end.
+
+Ltac solve_nums := 
+  cbv [Memory.bytes_per_word]in *;
+  pose word32_ok; (* required to run listZnWords on goals without words.*)
+    repeat match goal with
+          | |- context [Datatypes.length (skipn _ _)] => rewrite !length_skipn
+          | |- context [Datatypes.length (firstn _ _)] => rewrite !length_firstn
+          | |- context [Datatypes.length (List.app _ _)] => rewrite !List.length_app
+          | |- context [Datatypes.length (ws2bs _ _)] => rewrite !ws2bs_length
+          | |- context [felem_size_in_bytes] => change felem_size_in_bytes with 40 in *
+          | H: context [felem_size_in_bytes] |- _ => change felem_size_in_bytes with 40 in *
+          | |- context [felem_size_in_words] =>  change felem_size_in_words with 10%nat in *
+          | H: context [felem_size_in_words] |- _ => change felem_size_in_words with 10%nat in *
+        end; solve [lia|listZnWords].
+
+Definition projective_coords_to_bytes (c : projective_coords) : list byte :=
+  let '(X, Y, Z, Ta, Tb) := proj1_sig c in
+  (ws2bs bytes_per_word X) ++ (ws2bs bytes_per_word Y) ++ (ws2bs bytes_per_word Z) ++
+  (ws2bs bytes_per_word Ta) ++ (ws2bs bytes_per_word Tb).
+Lemma length_project_repr_to_list_byte (c : projective_coords):
+  Datatypes.length (projective_coords_to_bytes c) = Z.to_nat (pp_size).
+Proof.
+  intros.
+  destruct_points.
+  cbv [projective_coords_to_bytes proj1_sig] in *.
+  solve_nums.
+Qed.
+
+Lemma bytes_iff_p5 : forall (c : projective_coords) p, 
+  Lift1Prop.iff1 ((projective_coords_to_bytes c) $@ p) (p5at p c).
+Proof.
+  intros ? ?.
+  destruct_points.
+  cbv [projective_coords_to_bytes proj1_sig].
+
+  (* TODO ask andres if there are any issues with this appraoch of using iff1ToEq, and if there's an easier one.
+  seprewrite doesn't work here because we are under iff1 already. *)
+  repeat erewrite (iff1ToEq (felem_to_bytes _ _ _)).
+  repeat erewrite (iff1ToEq (sep_eq_of_list_word_at_app _ _ _ 40 _ _)).
+  replace ((Z.to_nat (Memory.bytes_per_word 32))) with 4%nat; [|solve_nums].
+  bottom_up_simpl_in_goal.
+  split; intros; ecancel_assumption. (* why does iff1_refl not work?*)
+  Unshelve.
+  all: try solve_nums.
+Qed.
 
 Instance spec_of_fe25519_half : spec_of "fe25519_half" :=
   fnspec! "fe25519_half"
@@ -331,17 +421,58 @@ Instance spec_of_fe25519_half : spec_of "fe25519_half" :=
         feval result = F.div (feval input) (F.add F.one F.one) /\
         m' =* (FElem result_location result)  * R}.
 
+Global Instance spec_of_copy_projective_coords : spec_of "copy_projective_coords" :=
+  fnspec! "copy_projective_coords"
+    (p_out p_in: word) / (a: projective_coords) out R, {
+      requires t m :=
+        m =* out $@ p_out * p5at p_in a * R /\
+        Datatypes.length out = Z.to_nat (pp_size);
+      ensures t' m' :=
+        t = t' /\
+        m' =* p5at p_out a * p5at p_in a * R
+    }.
+
+
+Global Instance spec_of_zero_projective_coords : spec_of "zero_projective_coords" :=
+  fnspec! "zero_projective_coords"
+    (p_out: word) / out R, {
+      requires t m :=
+        m =* out $@ p_out * R /\
+        Datatypes.length out = Z.to_nat (pp_size);
+      ensures t' m' :=
+        t = t' /\
+        exists zero_coords : projective_coords,
+          m' =* p5at p_out zero_coords * R /\
+          proj1_sig (zero) = feval_projective_coords zero_coords
+    }.
+
+Global Instance spec_of_zero_cached_coords : spec_of "zero_cached_coords" :=
+  fnspec! "zero_cached_coords"
+    (p_out p_d: word) / (d1 : felem) out R, {
+      requires t m :=
+        m =* out $@ p_out * FElem p_d d1 * R /\
+        d = feval d1 /\
+        bounded_by tight_bounds d1 /\
+        Datatypes.length out = Z.to_nat (cp_size);
+      ensures t' m' :=
+        t = t' /\
+        exists zero_coords : cached_coords,
+          m' =* p4at p_out zero_coords * FElem p_d d1 * R /\
+          proj1_sig (m1_prep zero) = feval_cached_coords zero_coords
+    }.
+
+
 Global Instance spec_of_add_precomputed : spec_of "add_precomputed" :=
   fnspec! "add_precomputed"
     (p_out p_a p_b: word) /
     (a: projective_coords) (b: precomputed_coords) (out : list byte) (R: _ -> Prop), {
       requires t m :=
-        m =* out $@ p_out * a p5@ p_a * b p3@ p_b * R/\
-        Datatypes.length out = Z.to_nat (5 * felem_size);
+        m =* out $@ p_out * p5at p_a a * p3at p_b b * R/\
+        Datatypes.length out = Z.to_nat (pp_size);
       ensures t' m' :=
         t = t' /\
         exists a_plus_b : projective_coords,
-          m' =* a_plus_b p5@ p_out * a p5@ p_a * b p3@ p_b * R /\
+          m' =* p5at p_out a_plus_b * p5at p_a a * p3at p_b b * R /\
           proj1_sig (m1add_precomputed_coordinates (coords_to_point a) (precomputed_coords_to_precomputed b))
              = feval_projective_coords a_plus_b
     }.
@@ -351,12 +482,12 @@ Global Instance spec_of_double : spec_of "double" :=
     (p_out p_a: word) /
     (a: projective_coords) (out : list byte) (R: _ -> Prop), {
       requires t m :=
-        m =* out $@ p_out * a p5@ p_a * R /\
-        Datatypes.length out = Z.to_nat (5 * felem_size);
+        m =* out $@ p_out * p5at p_a a * R /\
+        Datatypes.length out = Z.to_nat (pp_size);
       ensures t' m' := 
         t = t' /\
         exists a_double: projective_coords,
-          m' =* a_double p5@ p_out * a p5@ p_a * R /\
+          m' =* p5at p_out a_double * p5at p_a a * R /\
           proj1_sig (m1double (coords_to_point a)) = feval_projective_coords a_double
     }.
 
@@ -366,14 +497,14 @@ Global Instance spec_of_to_cached: spec_of "to_cached" :=
     (p_out p_a p_d: word) /
     (a: projective_coords) (d1: felem) (out : list byte) (R: _ -> Prop), {
       requires t m :=
-        m =* out $@ p_out * a p5@ p_a * FElem p_d d1 * R /\
+        m =* out $@ p_out * p5at p_a a * FElem p_d d1 * R /\
         Datatypes.length out = Z.to_nat (4 * felem_size) /\
         d = feval d1 /\
         bounded_by tight_bounds d1;
       ensures t' m' :=
         t = t' /\
         exists a_cached: cached_coords,
-          m' =* a_cached p4@ p_out * a p5@ p_a * FElem p_d d1 * R /\
+          m' =* p4at p_out a_cached * p5at p_a a * FElem p_d d1 * R /\
           proj1_sig (m1_prep (coords_to_point a)) = feval_cached_coords a_cached
   }.
 
@@ -382,12 +513,12 @@ Global Instance spec_of_readd : spec_of "readd" :=
     (p_out p_a p_c: word) /
     (a: projective_coords) (c: cached_coords) (out : list byte) (R : _ -> Prop), {
       requires t m :=
-        m =* out $@ p_out * a p5@ p_a * c p4@ p_c * R /\
+        m =* out $@ p_out * p5at p_a a * p4at p_c c * R /\
         Datatypes.length out = Z.to_nat (5 * felem_size);
       ensures t' m' :=
         t = t' /\
         exists a_plus_c: projective_coords,
-          m' =* a_plus_c p5@ p_out * a p5@ p_a * c p4@ p_c * R /\
+          m' =* p5at p_out a_plus_c * p5at p_a a * p4at p_c c * R /\
           proj1_sig (m1_readd (coords_to_point a) (cached_coords_to_cached c))
             = feval_projective_coords a_plus_c
   }.
@@ -409,16 +540,6 @@ Local Arguments word.add : simpl never.
 
 Local Arguments feval : simpl never.
 
-Local Ltac destruct_points :=
-  repeat match goal with
-    | _ => progress destruct_head' projective_coords
-    | _ => progress destruct_head' precomputed_coords
-    | _ => progress destruct_head' cached_coords
-    | _ => progress destruct_head' prod
-    | _ => progress destruct_head' and
-    | _ => progress lazy beta match zeta delta [precomputed_coordinates cached_coordinates proj1_sig] in *
-  end.
-
 Local Ltac cbv_bounds H :=
   cbv [un_xbounds bin_xbounds bin_ybounds un_square bin_mul bin_add bin_carry_add bin_sub bin_carry_sub un_outbounds bin_outbounds] in H;
   cbv [un_xbounds bin_xbounds bin_ybounds un_square bin_mul bin_add bin_carry_add bin_sub bin_carry_sub un_outbounds bin_outbounds].
@@ -431,30 +552,36 @@ Local Ltac solve_bounds :=
   | H: bounded_by _ ?x |- bounded_by _ ?x => cbv_bounds H
   end.
 
- Ltac skipn_firstn_length :=
-    change felem_size_in_bytes with 40 in *; listZnWords.
-
 Ltac split_stack_at_n_in stack p n H := rewrite <- (firstn_skipn n stack) in H;
-  rewrite (map.of_list_word_at_app_n _ _ _ n) in H; try skipn_firstn_length;
+  rewrite (map.of_list_word_at_app_n _ _ _ n) in H; try solve_nums;
   let D := fresh in 
   unshelve(epose (sep_eq_putmany _ _ (map.adjacent_arrays_disjoint_n p (firstn n stack) (skipn n stack) n _ _)) as D);
-  try skipn_firstn_length; seprewrite_in D H; rewrite ?skipn_skipn in H; bottom_up_simpl_in_hyp H; clear D.
+  try solve_nums; seprewrite_in D H; rewrite ?skipn_skipn in H; bottom_up_simpl_in_hyp H; clear D.
 
 Local Ltac solve_mem :=
   try match goal with  | |- exists _ : _ -> Prop, _%sep _ => eexists end;
   match goal with  | H : _ %sep ?m |- _ %sep ?m => bottom_up_simpl_in_goal_nop_ok end;
   match goal with
-  | |- _%sep _ => ecancel_assumption_impl
-  | H: ?P%sep ?m |- ?G%sep ?m =>  (* Solve Placeholder goals when a fixed size list is given *)
-    match P with context[map.of_list_word_at ?p ?stack] =>
-    match G with context[Placeholder ?p _] =>
-      solve [ cbv [Placeholder]; extract_ex1_and_emp_in_goal; bottom_up_simpl_in_goal_nop_ok;
-      split; [ecancel_assumption | skipn_firstn_length] ]
+  | H: ?P%sep ?m |- ?G%sep ?m =>
+    match P with context[p5at ?p ?a] =>
+    match G with context[_ $@ p] =>
+      SeparationLogic.seprewrite (bytes_iff_p5 a p); solve_mem
     end end
+  | H: ?P%sep ?m |- ?G%sep ?m =>
+    match G with context[p5at ?p ?a] =>
+    match P with context[_ $@ p] =>
+      SeparationLogic.seprewrite (iff1_sym (bytes_iff_p5 a p)); solve_mem
+    end end
+  | H: ?P%sep ?m |- ?G%sep ?m =>
+    match G with context[FElem ?p ?a] =>
+    match P with context[_ $@ p] =>
+      SeparationLogic.seprewrite (felem_to_bytes p a); [solve_nums|solve_mem]
+    end end
+  | |- _%sep _ => ecancel_assumption_impl
   end.
 
 Local Ltac single_step :=
-  repeat straightline; straightline_call; ssplit; try solve_mem; try solve_bounds.
+  repeat straightline; straightline_call; ssplit; try solve_mem; try solve_bounds; try solve_nums.
 
 (* Attempts to find anybytes terms in the goal and rewrites the first corresponding stack hypothesis
    to byte representation. straightline only supports deallocation for byte representation at the moment. *)
@@ -484,6 +611,31 @@ Ltac split_output_stack stack_var ptr_var num_points :=
     end
   end.
 
+Lemma copy_projective_coords_ok : program_logic_goal_for_function! copy_projective_coords.
+Proof.
+  single_step.
+  rewrite length_project_repr_to_list_byte; reflexivity.
+  repeat straightline.
+  solve_mem.
+Qed.
+
+Lemma zero_projective_coords_ok : program_logic_goal_for_function! zero_projective_coords.
+Proof.
+  do 4 straightline.
+  split_output_stack out p_out 5.
+
+  repeat single_step.
+
+  repeat straightline.
+  unshelve eexists.
+  eexists (x, x0, x1, x2, x3). (* TODO avoid naming these? *)
+  ssplit; try solve_bounds; try assumption.
+  cbv [valid_projective_coords]. ssplit; Field.fsatz.
+  cbv [p5at proj1_sig feval_projective_coords zero].
+  split. solve_mem.
+  repeat (f_equal; try Field.fsatz).
+Qed.
+
 Lemma to_cached_ok: program_logic_goal_for_function! to_cached.
 Proof.
   (* Without this, resolution of cbv stalls out Qed. *)
@@ -491,10 +643,18 @@ Proof.
       bin_carry_sub un_outbounds bin_outbounds].
 
   repeat straightline.
+  split_output_stack out p_out 4.
   pose proof (cached_implies_coords_valid (m1_prep (coords_to_point a0))) as HPost.
   destruct_points.
-  split_output_stack out p_out 4.
-  repeat straightline.
+
+  repeat single_step.
+
+  3: {
+    (* FElem -> $@ is missing now? Ah yes, this used to be Placeholder *)
+    epose proof (felem_to_bytes _ _ _).
+    SeparationLogic.seprewrite (felem_to_bytes p_out x3); [solve_nums|].
+    solve_mem.
+  }
 
   repeat single_step.
 
@@ -510,6 +670,47 @@ Proof.
       bin_carry_add bin_sub] in *;
     congruence).
 Qed.
+
+(* TODO is this already in the ecancel database? If not, should it be? *)
+    Ltac ptsto_to_sepclause_in p H :=
+      let AR := fresh in
+      epose (array1_iff_eq_of_list_word_at p) as AR; seprewrite_in AR H; [solve_nums|]; clear AR.
+
+Lemma zero_cached_coords_ok : program_logic_goal_for_function! zero_cached_coords.
+Proof.
+  single_step.
+  ptsto_to_sepclause_in a0 H1. solve_mem. solve_nums.
+
+  single_step. assumption.
+
+  repeat straightline.
+
+  (* TODO plug the stuff below in lemmas/tactics for solve_deallocation etc. *)
+
+  (* I need a good length assumption *)
+  (* my goal here is to get p5@ -> bytearray, should have a lemma for it and then add it to solve_deallocation *)
+  assert (Datatypes.length (projective_coords_to_bytes x) = 200%nat). admit.
+  epose proof (p5_impl_bytes x a0). (* this should be the right thing to use.. or do I need array ptsto?
+    nevertheless, switching between bytearray and sepclause of map is easy. 
+    I guess to use it as rewrite, I need an iff1 version of it. *)
+  (* let's try this and make sure it's the right thing *)
+  replace (x p5@ a0) with (sepclause_of_map ((projective_coords_to_bytes x)$@a0)) in H13; [|admit].
+  (* yup, still need array ptsto *)
+  epose (iff1_sym (array1_iff_eq_of_list_word_at _ _ _)).
+  seprewrite_in i H13.
+  repeat straightline.
+  Unshelve. 2:solve_nums.
+  clear i. clear H9. clear H10. clear H15.
+
+  exists x0. (* TODO avoid naiming*)
+  split; [solve_mem|].
+  rewrite <- H14.
+
+  (* any nice lemma I can add to avoid destructing points here? *)
+  destruct_points. 
+  cbv [m1_prep coords_to_point proj1_sig feval_projective_coords feval_cached_coords zero] in *.
+  Prod.inversion_prod. congruence.
+Admitted.
 
 Lemma add_precomputed_ok : program_logic_goal_for_function! add_precomputed.
 Proof.

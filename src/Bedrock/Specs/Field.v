@@ -46,7 +46,7 @@ Class FieldRepresentation
     bytes_in_bounds : list byte -> Prop;
 
     (* Memory layout *)
-    FElem : word -> list word -> mem -> Prop := Bignum felem_size_in_words;
+    FElem : word -> felem -> mem -> Prop := array scalar (word.of_Z (bytes_per_word width));
     FElemBytes : word -> list byte -> mem -> Prop :=
       fun addr bs =>
         (emp (length bs = encoded_felem_size_in_bytes
@@ -59,14 +59,6 @@ Class FieldRepresentation
     loose_bounds : bounds;
     tight_bounds : bounds;
   }.
-
-Definition Placeholder
-        {field_parameters : FieldParameters}
-        {width: Z} {BW: Bitwidth width} {word: word.word width} {mem: map.map word Byte.byte}
-        {field_representation : FieldRepresentation(mem:=mem)}
-        (p : word) (bs : list byte): mem -> Prop :=
-(sep (map.of_list_word_at p bs)
-  (emp (Z.of_nat (length bs) = felem_size_in_bytes))).
 
 Class FieldRepresentation_ok
       {field_parameters : FieldParameters}
@@ -95,16 +87,21 @@ Section FunctionSpecs.
 
   Import WeakestPrecondition.
 
+  Coercion Z.to_nat : Z >-> nat.
+
   Definition unop_spec {name} (op: UnOp name) :=
     fnspec! name (pout px : word) / (x : felem) out Rr,
     { requires tr mem :=
         bounded_by un_xbounds x
+        /\ length x = felem_size_in_words
+        /\ length out = felem_size_in_bytes
         /\ (exists Ra, (FElem px x * Ra)%sep mem)
-        /\ (Placeholder pout out * Rr)%sep mem;
+        /\ (out$@pout * Rr)%sep mem;
       ensures tr' mem' :=
         tr = tr' /\
         exists out,
           feval out = un_model (feval x)
+          /\ length out = felem_size_in_words
           /\ bounded_by un_outbounds out
           /\ (FElem pout out * Rr)%sep mem' }.
 
@@ -122,13 +119,17 @@ Section FunctionSpecs.
     { requires tr mem :=
         bounded_by bin_xbounds x
         /\ bounded_by bin_ybounds y
+        /\ length out = felem_size_in_bytes
+        /\ length x = felem_size_in_words
+        /\ length y = felem_size_in_words
         /\ (exists Rx, (FElem px x * Rx)%sep mem)
         /\ (exists Ry, (FElem py y * Ry)%sep mem)
-        /\ (Placeholder pout out * Rr)%sep mem;
+        /\ (out$@pout * Rr)%sep mem;
       ensures tr' mem' :=
         tr = tr' /\
         exists out,
           feval out = bin_model (feval x) (feval y)
+          /\ length out = felem_size_in_words
           /\ bounded_by bin_outbounds out
           /\ (FElem pout out * Rr)%sep mem' }.
 
@@ -158,12 +159,14 @@ Section FunctionSpecs.
     fnspec! from_bytes (pout px : word) / (out bs : list byte) Rr,
     { requires tr mem :=
         (exists Ra, (array ptsto (word.of_Z 1) px bs * Ra)%sep mem)
-        /\ (Placeholder pout out * Rr)%sep mem
+        /\ length out = felem_size_in_bytes
+        /\ (out$@pout * Rr)%sep mem
         /\ Field.bytes_in_bounds bs;
       ensures tr' mem' :=
         tr = tr' /\
         exists X, feval X = feval_bytes bs
              /\ bounded_by tight_bounds X
+             /\ length X = felem_size_in_words
              /\ (FElem pout X * Rr)%sep mem' }.
 
   Instance spec_of_to_bytes : spec_of to_bytes :=
@@ -171,6 +174,7 @@ Section FunctionSpecs.
     { requires tr mem :=
         (array ptsto (word.of_Z 1) pout out * Rr)%sep mem /\
         length out = encoded_felem_size_in_bytes /\
+        length x = felem_size_in_words /\
         (exists Ra, (FElem px x * Ra)%sep mem) /\
         bounded_by tight_bounds x;
       ensures tr' mem' := tr = tr' /\
@@ -181,7 +185,9 @@ Section FunctionSpecs.
   Instance spec_of_felem_copy : spec_of felem_copy :=
     fnspec! felem_copy (pout px : word) / (x : felem) out R,
     { requires tr mem :=
-        (FElem px x * Placeholder pout out * R)%sep mem;
+        length out = felem_size_in_bytes /\
+        length x = felem_size_in_words /\
+        (FElem px x * out$@pout * R)%sep mem;
       ensures tr' mem' :=
         tr = tr' /\
         (FElem px x * FElem pout x * R)%sep mem' }.
@@ -189,10 +195,12 @@ Section FunctionSpecs.
   Instance spec_of_from_word : spec_of from_word :=
     fnspec! from_word (pout x : word) / out R,
     { requires tr mem :=
-        (Placeholder pout out * R)%sep mem;
+        length out = felem_size_in_bytes /\
+        (out $@ pout * R)%sep mem;
       ensures tr' mem' :=
         tr = tr' /\
         exists X, feval X = F.of_Z _ (word.unsigned x)
+             /\ length X = felem_size_in_words
              /\ bounded_by tight_bounds X
              /\ (FElem pout X * R)%sep mem' }.
 
@@ -202,7 +210,10 @@ Section FunctionSpecs.
     fnspec! select_znz (pout pc px py : word) / out Rout Rx Ry x y,
     {
         requires tr mem :=
-        (Placeholder pout out * Rout)%sep mem /\
+        length out = felem_size_in_bytes /\
+        length x = felem_size_in_words /\
+        length y = felem_size_in_words /\
+        (out $@ pout * Rout)%sep mem /\
         (FElem px x * Rx)%sep mem /\
         (FElem py y * Ry)%sep mem /\
         ZRange.is_bounded_by_bool (word.unsigned pc) bit_range = true;
@@ -243,93 +254,129 @@ Section SpecProperties.
           {field_representation : FieldRepresentation}
           {field_representation_ok : FieldRepresentation_ok}.
 
+  (* There's two ways to represent bytes per word, one in nat and one in Z.*)
+  Lemma bytes_per_normalize_1 : Z.of_nat (Memory.bytes_per (width:=width) access_size.word) = bytes_per_word width.
+  Proof.
+    pose Types.word_size_in_bytes_pos; cbv [bytes_per_word bytes_per] in *; lia.
+  Qed.
+  Lemma bytes_per_normalize_2 : Memory.bytes_per (width:=width) access_size.word = Z.to_nat (bytes_per_word width).
+  Proof.
+    pose Types.word_size_in_bytes_pos; cbv [bytes_per_word bytes_per] in *; lia.
+  Qed.
+  Hint Rewrite bytes_per_normalize_2 bytes_per_normalize_1 : bytes_per.
+
   Lemma felem_size_in_bytes_mod :
          felem_size_in_bytes mod Memory.bytes_per_word width = 0.
-  Proof. apply Z_mod_mult. Qed.
-
-  Local Coercion Z.to_nat : Z >-> nat.
-
-  Lemma Placeholder_impl_FElem_bytes p bs :
-    Lift1Prop.impl1 (Placeholder p bs) (FElem p (bs2ws (bytes_per_word width) bs)).
-  Proof.
-    repeat intro.
-    pose (Bignum_of_bytes felem_size_in_words p bs) as HBignum.
-    epose (array1_iff_eq_of_list_word_at p bs) as HArray.
-    pose felem_size_ok.
-    cbv [FElem Placeholder felem_size_in_bytes] in *.
-    intros.
-    extract_ex1_and_emp_in_hyps. apply HBignum. lia.
-      apply HArray. lia. assumption.
+  Proof. 
+    apply Z_mod_mult.
   Qed.
 
-  Lemma FElem_impl_Placeholder p ws :
-    Lift1Prop.impl1 (FElem p ws) (Placeholder p (ws2bs (bytes_per_word width) ws)).
+  Lemma felem_size_in_bytes_mod_nat :
+         (Z.to_nat felem_size_in_bytes mod Z.to_nat (Memory.bytes_per_word width) = 0)%nat.
+  Proof. 
+    pose proof Types.word_size_in_bytes_pos.
+    cbv [bytes_per_word bytes_per felem_size_in_bytes] in *.
+    rewrite Modulo.Z.mod_to_nat; try lia.
+    rewrite Z_mod_mult. lia.
+  Qed.
+
+  Lemma ws2bs_felem_length (x : felem):
+    length x = felem_size_in_words ->
+    length (ws2bs (width:=width) (Z.to_nat (bytes_per_word width)) x) = felem_size_in_bytes.
   Proof.
-    repeat intro.
-    pose (Bignum_to_bytes felem_size_in_words p ws) as HBignum.
+    intros felem_length.
+    rewrite ws2bs_length. rewrite felem_length.
+    cbv [bytes_per_word felem_size_in_bytes] in *. lia.
+  Qed.
+
+  Lemma ws2bs_felem_width (x : felem):
+    length x = felem_size_in_words ->
+    Z.of_nat (Datatypes.length (ws2bs (width:=width) (Z.to_nat (bytes_per_word width)) x)) <= 2 ^ width.
+  Proof.
+    intros felem_length.
+    rewrite ws2bs_length. rewrite felem_length. pose proof felem_size_ok.
+    cbv [bytes_per_word felem_size_in_bytes] in *. lia.
+  Qed.
+
+  Lemma bs2ws_felem_length bs : 
+    length bs = felem_size_in_bytes ->
+    length (bs2ws (word:=word) (bytes_per_word width) bs) = felem_size_in_words.
+  Proof.
+    intros H.
     pose felem_size_ok.
-    cbv [FElem Placeholder felem_size_in_bytes] in *.
-    apply HBignum in H. extract_ex1_and_emp_in_hyps.
-    extract_ex1_and_emp_in_goal; split.
-    apply array1_iff_eq_of_list_word_at; try assumption.
-    lia.
     pose Types.word_size_in_bytes_pos.
-    lia.
+    pose felem_size_in_bytes_mod.
+    cbv [felem_size_in_bytes] in *. rewrite bs2ws_length; try ZnWords; try lia.
+    rewrite H. rewrite <- Z2Nat.inj_div; try lia.
+    rewrite Z_div_mult; try lia. (* lia nor ZnWords can solve this *)
+    rewrite H.
+    rewrite Modulo.Z.mod_to_nat; try lia. (* lia nor ZnWords can solve this *)
   Qed.
 
-  Lemma Placeholder_iff_FElem_bytes p bs : 
-    Lift1Prop.iff1 (Placeholder p bs) (sep (FElem p ((bs2ws (bytes_per_word width) bs))) (emp (Datatypes.length bs = felem_size_in_bytes))).
+  Lemma felem_to_bytes p x :
+    length x = felem_size_in_words ->
+    Lift1Prop.iff1 (FElem p x) ((ws2bs (bytes_per_word width) x) $@p).
   Proof.
-    repeat intro.
-    pose (Bignum_of_bytes felem_size_in_words p bs) as HBignum.
-    epose (array1_iff_eq_of_list_word_at p bs) as HArray.
-    pose felem_size_ok.
-    cbv [FElem Placeholder felem_size_in_bytes] in *.
-    split; intros.
-    - sepsimpl. apply HBignum. lia.
-      apply HArray. lia. assumption.
-      lia.
-    - sepsimpl. apply HArray; try lia. apply HBignum; try lia.
-      assumption. pose Types.word_size_in_bytes_pos. lia.
+    intros felem_length.
+    cbv [FElem].
+    epose proof (iff1ToEq (bytes_of_words _ _)) as Hbytes_of_words.
+    epose proof (iff1ToEq (
+        array1_iff_eq_of_list_word_at _ _ (ws2bs_felem_width _ felem_length))) as Harray1_to_list_word_at.
+
+    autorewrite with bytes_per in *.
+
+    rewrite <- (Harray1_to_list_word_at).
+    rewrite Hbytes_of_words.
+    apply iff1_refl.
   Qed.
 
-  Lemma Placeholder_iff_FElem_words p ws :
-    Lift1Prop.iff1 (sep (Placeholder p (ws2bs (bytes_per_word width) ws)) (emp (Datatypes.length ws = felem_size_in_words))) (FElem p ws).
+  Lemma felem_to_bytearray p x :
+    length x = felem_size_in_words ->
+    Lift1Prop.iff1 (FElem p x) (array ptsto (word.of_Z 1) p (ws2bs (bytes_per_word width) x)).
   Proof.
-    repeat intro.
-    pose (Bignum_to_bytes felem_size_in_words p ws) as HBignum.
-    pose felem_size_ok.
-    cbv [FElem Placeholder felem_size_in_bytes] in *.
-    split; intros.
-    - sepsimpl. apply HBignum.
-      sepsimpl; try lia.
-      apply array1_iff_eq_of_list_word_at; try assumption; try lia.
-    - apply HBignum in H. sepsimpl.
-      apply array1_iff_eq_of_list_word_at; try assumption; lia.
-      rewrite H. pose Types.word_size_in_bytes_pos. lia.
-      pose Types.word_size_in_bytes_pos.
-      rewrite ws2bs_length in H. nia.
+    intros felem_length.
+    rewrite (iff1ToEq (felem_to_bytes _ _ felem_length)).
+    erewrite (iff1ToEq (array1_iff_eq_of_list_word_at _ _ (ws2bs_felem_width _ felem_length))).
+    apply iff1_refl.
   Qed.
 
-  (* this is almost bytearray_iff_bytes *)
-  Lemma Placeholder_iff_array1 p bs :
-    Datatypes.length bs = felem_size_in_bytes ->
-    Lift1Prop.iff1 (Placeholder p bs) (array ptsto (word.of_Z 1) p bs).
+  Lemma felem_from_bytes p bs :
+    length bs = felem_size_in_bytes ->
+    Lift1Prop.iff1 (bs$@p) (FElem p (bs2ws (width:=width) (bytes_per_word width) bs)).
   Proof.
-    repeat intro.
-    cbv [Placeholder].
-    pose felem_size_ok. apply iff1_sym.
-    rewrite array1_iff_eq_of_list_word_at; try assumption.
-    - split; intros; extract_ex1_and_emp_in_goal; extract_ex1_and_emp_in_hyps; try split; try assumption.
-      rewrite H. pose Types.word_size_in_bytes_pos. cbv [felem_size_in_bytes]. lia.
-    - lia.
+    intros felem_length.
+    cbv [FElem].
+    epose proof ((words_of_bytes _ _ _)) as Hwords_of_bytes.
+    epose proof ((array1_iff_eq_of_list_word_at _ _ _)) as Harray1_to_list_word_at.
+
+    autorewrite with bytes_per in *.
+
+    rewrite <- (Harray1_to_list_word_at).
+    rewrite Hwords_of_bytes.
+    apply iff1_refl.
+ 
+    Unshelve. (* side conditions -> move to solve_numbers tactics. *)
+    rewrite felem_length. autorewrite with bytes_per. apply felem_size_in_bytes_mod_nat.
+    rewrite felem_length. pose proof felem_size_ok. lia.
+  Qed.
+
+  Lemma felem_from_bytearray p bs :
+    length bs = felem_size_in_bytes ->
+    Lift1Prop.iff1 (array ptsto (word.of_Z 1) p bs) (FElem p (bs2ws (width:=width) (bytes_per_word width) bs)).
+  Proof.
+    intros felem_length.
+    rewrite <- (iff1ToEq (felem_from_bytes _ _ felem_length)).
+    erewrite <-(iff1ToEq (array1_iff_eq_of_list_word_at _ _ _)).
+    apply iff1_refl.
+
+    Unshelve.
+    rewrite felem_length. pose proof felem_size_ok. lia.
   Qed.
 
   Lemma M_nonzero : M <> 0.
   Proof. cbv [M]. congruence. Qed.
 End SpecProperties.
-
-
+(*
 (* array1 -> Placeholder, only works if length sidecondition can be solved by ZnWords or lia. *)
 #[export] Hint Extern 1 (Lift1Prop.impl1 (array ptsto (word.of_Z 1) ?p ?stack) (Placeholder (field_representation:=?frep) ?p _)) => (
     unshelve(erewrite <- (Placeholder_iff_array1 (field_representation:=frep) p _ _));
@@ -339,4 +386,4 @@ End SpecProperties.
 
 (* FElem -> Placeholder *)
 #[export] Hint Extern 1 (Lift1Prop.impl1 (FElem ?px ?x) (Placeholder ?px _)) => (apply FElem_impl_Placeholder) : ecancel_impl.
-
+*)

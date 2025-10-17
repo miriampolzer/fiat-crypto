@@ -63,5 +63,5 @@ Section Representation.
   Proof.
     split. cbn [bounded_by frep]; intros. apply relax_bounds; auto.
     apply felem_size_ok.
-  Qed.
+  Qed.(sep_eq_of_list_word_at_app _ _ _ _ _ 40)
 End Representation.

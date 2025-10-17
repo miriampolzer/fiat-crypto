@@ -24,7 +24,7 @@ Section Compile.
 
   (* TODO: Replace uses of the old FElem with this? *)
   Definition FElem mbounds ptr v :=
-    (Lift1Prop.ex1 (fun v' => (emp (feval v' = v /\ maybe_bounded mbounds v') * FElem ptr v')%sep)).
+    (Lift1Prop.ex1 (fun v' => (emp (Datatypes.length v' = felem_size_in_words /\ feval v' = v /\ maybe_bounded mbounds v') * FElem ptr v')%sep)).
 
   Lemma drop_bounds_FElem x_ptr x bounds
     : Lift1Prop.impl1 (FElem bounds x_ptr x)
@@ -48,6 +48,7 @@ Section Compile.
     sepsimpl; simpl in *; eauto using relax_bounds.
   Qed.
 
+  (*
   Lemma FElem'_iff_bytes
     : forall px : word.rep,
       Lift1Prop.iff1 (Lift1Prop.ex1 (Placeholder px)) (Lift1Prop.ex1 (FElem None px)).
@@ -79,6 +80,7 @@ Section Compile.
     eexists. eapply FElem_impl_Placeholder.
     eassumption.
   Qed.
+  *)
 
   #[refine]
    Instance felem_alloc : Allocable (FElem None) :=
@@ -88,21 +90,28 @@ Section Compile.
     |}.
   Proof.
     {
+      pose Types.word_size_in_bytes_pos.
       intros; intros m H.
-      apply FElem'_to_bytes in H.
-      cbv[Placeholder] in *.
-      sepsimpl.
-      eexists.
-      pose felem_size_ok.
-      ssplit; try eassumption.
-      lia.
+      cbv [FElem anybytes] in *. sepsimpl.
+      seprewrite_in felem_to_bytes H0; [assumption|].
+      eexists; ssplit. sepsimpl. use_sep_assumption. cancel.
+      cancel_seps_at_indices 0%nat 0%nat. reflexivity. cancel.
+      rewrite ws2bs_felem_length; auto.
+      cbv [felem_size_in_bytes]. lia.
+      apply ws2bs_felem_width. auto.
     }
     {
       intros; intros m H.
-      apply FElem'_iff_bytes.
-      cbv [Memory.anybytes Placeholder] in *. sepsimpl.
-      eexists; try eassumption.
-      sepsimpl; try eassumption.
+      cbv [FElem anybytes] in *. sepsimpl.
+      eexists. eexists. sepsimpl.
+      4: {
+        unshelve epose (iff1_sym (felem_from_bytes px x _)) as F.
+        lia.
+        SeparationLogic.seprewrite F. sepsimpl. rewrite H. reflexivity. auto.
+      }
+      rewrite bs2ws_felem_length; try lia.
+      reflexivity.
+      cbv [maybe_bounded]. auto.
     }
   Defined.
 
@@ -117,6 +126,9 @@ Section Compile.
 
   Local Hint Extern 1 (spec_of _) => (simple refine (@spec_of_BinOp _ _ _ _ _ _ _ _ _ _)) : typeclass_instances.
   Local Hint Extern 1 (spec_of _) => (simple refine (@spec_of_UnOp _ _ _ _ _ _ _ _ _ _)) : typeclass_instances.
+
+    Hint Extern 1 (Lift1Prop.impl1 (Field.FElem ?px ?x) (_)) => (epose proof (iff1ToEq (felem_to_bytes _ _ _)) as ?HF;
+      rewrite HF; clear HF; exact impl1_refl) : ecancel_impl.
 
   Lemma compile_binop {name} {op: BinOp name}
         {tr m l functions} x y:
@@ -156,8 +168,9 @@ Section Compile.
     repeat straightline'.
     unfold FElem in *.
     sepsimpl.
-    prove_field_compilation.
-    apply H6.
+    unshelve prove_field_compilation; [lia (*todo resolve in hint*)|
+    rewrite ws2bs_felem_length; lia|
+    apply H6].
 
     eapply Proper_sep_impl1; eauto.
     2:exact(fun a b => b).
@@ -201,7 +214,9 @@ Section Compile.
     repeat straightline'.
     unfold FElem in *.
     sepsimpl.
-    prove_field_compilation.
+    unshelve prove_field_compilation.
+    lia.
+    rewrite ws2bs_felem_length; lia.
     apply H4.
 
     eapply Proper_sep_impl1; eauto.
@@ -281,7 +296,9 @@ Section Compile.
     repeat straightline'.
     unfold FElem in *.
     sepsimpl.
-    prove_field_compilation.
+    unshelve prove_field_compilation.
+    lia.
+    rewrite ws2bs_felem_length; lia.
     apply H3.
 
     extract_ex1_and_emp_in_goal; ssplit; eauto.
@@ -323,7 +340,9 @@ Section Compile.
     repeat straightline'.
     unfold FElem in *.
     extract_ex1_and_emp_in H1.
-    prove_field_compilation.
+    unshelve prove_field_compilation.
+    lia.
+    rewrite ws2bs_felem_length; lia.
     match goal with H : _ |- _ => rewrite word.of_Z_unsigned in H end.
     apply H3.
     extract_ex1_and_emp_in_goal; ssplit; eauto.
