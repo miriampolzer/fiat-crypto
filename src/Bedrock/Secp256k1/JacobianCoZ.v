@@ -297,7 +297,7 @@ Section WithParameters.
              (FElem XK X) * (FElem YK Y) * (FElem ZK Z) * R;
       ensures t' m' :=
         t = t' /\
-        exists OX' OY' OZ',
+        exists (OX' OY' OZ' : felem),
         proj1_sig (jopp P) = ((feval OX'), (feval OY'), (feval OZ')) /\
         bounded_by tight_bounds OX' /\
         bounded_by tight_bounds OY' /\
@@ -320,7 +320,7 @@ Section WithParameters.
              (FElem XK X) * (FElem YK Y) * (FElem ZK Z) * R;
       ensures t' m' :=
         t = t' /\
-        exists OX' OY',
+        exists (OX' OY' : felem),
         proj1_sig (snd (make_co_z P Q HQaff)) = ((feval OX'), (feval OY'), (feval Z)) /\
         bounded_by tight_bounds OX' /\
         bounded_by tight_bounds OY' /\
@@ -347,7 +347,7 @@ Section WithParameters.
              (FElem X2K X2) * (FElem Y2K Y2) * (FElem ZK Z) * R;
       ensures t' m' :=
         t = t' /\
-        exists OX1' OY1' OX2' OY2' OZ',
+        exists (OX1' OY1' OX2' OY2' OZ' : felem),
         proj1_sig (fst (zaddu P Q HPQ)) = ((feval OX1'), (feval OY1'), (feval OZ')) /\
         proj1_sig (snd (zaddu P Q HPQ)) = ((feval OX2'), (feval OY2'), (feval OZ')) /\
         bounded_by tight_bounds OX1' /\
@@ -380,7 +380,7 @@ Section WithParameters.
              (FElem X2K X2) * (FElem Y2K Y2) * (FElem ZK Z) * R;
       ensures t' m' :=
         t = t' /\
-        exists OX1' OY1' OX2' OY2' OZ',
+        exists (OX1' OY1' OX2' OY2' OZ' : felem),
         proj1_sig (fst (zaddc P Q HPQ)) = ((feval OX1'), (feval OY1'), (feval OZ')) /\
         proj1_sig (snd (zaddc P Q HPQ)) = ((feval OX2'), (feval OY2'), (feval OZ')) /\
         bounded_by tight_bounds OX1' /\
@@ -408,7 +408,7 @@ Section WithParameters.
              (FElem X1K X1) * (FElem Y1K Y1) * R;
       ensures t' m' :=
         t = t' /\
-        exists OX1' OY1' OX2' OY2' OZ',
+        exists (OX1' OY1' OX2' OY2' OZ' : felem),
         proj1_sig (fst (dblu P HPaff)) = ((feval OX1'), (feval OY1'), (feval OZ')) /\
         proj1_sig (snd (dblu P HPaff)) = ((feval OX2'), (feval OY2'), (feval OZ')) /\
         bounded_by tight_bounds OX1' /\
@@ -435,7 +435,7 @@ Section WithParameters.
              (FElem X1K X1) * (FElem Y1K Y1) * R;
       ensures t' m' :=
         t = t' /\
-        exists OX1' OY1' OX2' OY2' OZ',
+        exists (OX1' OY1' OX2' OY2' OZ' : felem),
         proj1_sig (fst (tplu P HPaff)) = ((feval OX1'), (feval OY1'), (feval OZ')) /\
         proj1_sig (snd (tplu P HPaff)) = ((feval OX2'), (feval OY2'), (feval OZ')) /\
         bounded_by tight_bounds OX1' /\
@@ -465,7 +465,7 @@ Section WithParameters.
              (FElem X2K X2) * (FElem Y2K Y2) * (FElem ZK Z) * R;
       ensures t' m' :=
         t = t' /\
-        exists OX1 OY1 OX2 OY2 OZ,
+        exists (OX1 OY1 OX2 OY2 OZ : felem),
         proj1_sig (fst (zdau P Q HPQ)) = ((feval OX1), (feval OY1), (feval OZ)) /\
         proj1_sig (snd (zdau P Q HPQ)) = ((feval OX2), (feval OY2), (feval OZ)) /\
         bounded_by tight_bounds OX1 /\
@@ -505,7 +505,7 @@ Section WithParameters.
       end.
 
   Local Ltac solve_stack :=
-    (* Rewrites the `stack$@a` term in H to use a Bignum instead *)
+    (* Rewrites the `stack$@a` term in H to use a of_list_word_at instead *)
     cbv [FElem];
     match goal with
     | H: _%sep ?m |- (Bignum.Bignum felem_size_in_words ?a _ * _)%sep ?m =>
@@ -515,8 +515,10 @@ Section WithParameters.
     (* proves the memory matches up *)
     use_sep_assumption; cancel; cancel_seps_at_indices 0%nat 0%nat; cbn; [> trivial | eapply RelationClasses.reflexivity].
 
+  Local Ltac solve_length := solve [rewrite ?ws2bs_felem_length; try lia; change felem_size_in_bytes with 32 in *; lia].
+
   Local Ltac single_step :=
-    repeat straightline; straightline_call; ssplit; try solve_mem; try solve_bounds; try solve_stack.
+    repeat straightline; straightline_call; ssplit; try solve_mem; try solve_bounds; try solve_stack; try solve_length.
 
   Lemma secp256k1_jopp_ok : program_logic_goal_for_function! secp256k1_jopp.
   Proof.
@@ -540,18 +542,23 @@ Section WithParameters.
   Proof.
     Strategy -1000 [un_xbounds bin_xbounds bin_ybounds un_square bin_mul bin_add bin_carry_add bin_sub un_outbounds bin_outbounds].
 
+
+    (* array1 -> bytes for ecancel_assumption_impl. TODO move this to a central place *)
+    Hint Extern 1 (Lift1Prop.impl1 (array ptsto (word.of_Z 1) ?px ?x) (sepclause_of_map (map.of_list_word_at ?px _))) => (erewrite (array1_iff_eq_of_list_word_at _ _ ); [exact impl1_refl | lia] ) : ecancel_impl.
+    
     do 4 single_step.
     repeat straightline.
 
-    cbv [FElem] in *.
-    match goal with
+    (*TODO make this available via Field.v? repeated here and in addchain *)
+    repeat match goal with
     | |- context [anybytes ?a _ _] =>
         match goal with
-        | H: _ ?a' |- context [map.split ?a' _ _] =>
-            seprewrite_in (@Bignum.Bignum_to_bytes _ _ _ _ _ _ felem_size_in_words a) H
+        | H: ?P ?a' |- context [map.split ?a' _ _] =>
+          match P with context [FElem a ?x] =>
+            seprewrite_in (felem_to_bytearray a) H; pose proof (ws2bs_felem_length x)
+          end
         end
     end.
-    extract_ex1_and_emp_in H26.
 
     repeat straightline.
     exists x3, x5; ssplit. 2-3:solve_bounds.
@@ -576,15 +583,15 @@ Section WithParameters.
 
     repeat straightline.
     (* Rewrites the FElems for the stack to be about bytes instead *)
-    cbv [FElem] in *.
     repeat match goal with
     | |- context [anybytes ?a _ _] =>
         match goal with
-        | H: _ ?a' |- context [map.split ?a' _ _] =>
-            seprewrite_in (@Bignum.Bignum_to_bytes _ _ _ _ _ _ felem_size_in_words a) H
+        | H: ?P ?a' |- context [map.split ?a' _ _] =>
+          match P with context [FElem a ?x] =>
+            seprewrite_in (felem_to_bytearray a) H; pose proof (ws2bs_felem_length x)
+          end
         end
     end.
-    extract_ex1_and_emp_in H92.
 
     (* Solve stack/memory stuff *)
     repeat straightline.
@@ -609,15 +616,15 @@ Section WithParameters.
     do 4 single_step.
 
     repeat straightline.
-    cbv [FElem] in *.
     repeat match goal with
     | |- context [anybytes ?a _ _] =>
         match goal with
-        | H: _ ?a' |- context [map.split ?a' _ _] =>
-            seprewrite_in (@Bignum.Bignum_to_bytes _ _ _ _ _ _ felem_size_in_words a) H
+        | H: ?P ?a' |- context [map.split ?a' _ _] =>
+          match P with context [FElem a ?x] =>
+            seprewrite_in (felem_to_bytearray a) H; pose proof (ws2bs_felem_length x)
+          end
         end
     end.
-    extract_ex1_and_emp_in H140.
 
     repeat straightline.
     exists x11,x23,x7,x19,x0; ssplit. 3-7:solve_bounds.
@@ -636,15 +643,15 @@ Section WithParameters.
     repeat single_step.
 
     repeat straightline.
-    cbv [FElem] in *.
     repeat match goal with
     | |- context [anybytes ?a _ _] =>
         match goal with
-        | H: _ ?a' |- context [map.split ?a' _ _] =>
-            seprewrite_in (@Bignum.Bignum_to_bytes _ _ _ _ _ _ felem_size_in_words a) H
+        | H: ?P ?a' |- context [map.split ?a' _ _] =>
+          match P with context [FElem a ?x] =>
+            seprewrite_in (felem_to_bytearray a) H; pose proof (ws2bs_felem_length x)
+          end
         end
     end.
-    extract_ex1_and_emp_in H114.
 
     repeat straightline.
     exists x13,x19,x8,x16,x0; ssplit. 3-7:solve_bounds.
@@ -660,54 +667,42 @@ Section WithParameters.
     ecancel_assumption.
   Qed.
 
+  (* bytearray -> FElem for ecancel_assumption_impl. This needs to be local because it needs solve_length which uses the felem byte length.
+  TODO I could create a version that tries out common byte lengths, or make the programs not use constants? But I think properly
+  dealing here is a separate refactoring. *)
+  Hint Extern 1 (Lift1Prop.impl1 (array ptsto (word.of_Z 1) ?p ?bs) (FElem ?p _)) => 
+      (unshelve (erewrite (felem_from_bytearray _ _ _)); [solve_length | exact impl1_refl]) : ecancel_impl.
+
   Lemma secp256k1_tplu_ok: program_logic_goal_for_function! secp256k1_tplu.
   Proof.
     Strategy -1000 [un_xbounds bin_xbounds bin_ybounds un_square bin_mul bin_add bin_carry_add bin_sub un_outbounds bin_outbounds].
 
-    repeat straightline.
-    eapply Proper_call; cycle -1; [eapply H|try eabstract (solve [ Morphisms.solve_proper ])..]; [ .. | intros ? ? ? ? ].
-    ssplit; [eexists; eassumption|..]; try eassumption.
-    repeat match goal with
-    | H: context [array ptsto _ ?a _] |- context [FElem ?a _] =>
-        seprewrite_in (@Bignum.Bignum_of_bytes _ _ _ _ _ _ 4 a) H; [trivial|]
-    end.
-    multimatch goal with
-    | |- _ ?m1 =>
-        multimatch goal with
-        | H:_ ?m2
-          |- _ =>
-            syntactic_unify._syntactic_unify_deltavar m1 m2;
-            refine (Lift1Prop.subrelation_iff1_impl1 _ _ _ _ _ H); clear H
-        end
-    end; cancel.
-    cancel_seps_at_indices 4%nat 0%nat; [reflexivity|].
-    cancel_seps_at_indices 3%nat 0%nat; [reflexivity|].
-    cancel_seps_at_indices 2%nat 0%nat; [reflexivity|].
-    cancel_seps_at_indices 1%nat 0%nat; [reflexivity|].
-    cancel_seps_at_indices 0%nat 0%nat; [reflexivity|].
-    solve [ecancel].
+    single_step.
+    eexists. eassumption.
 
-    repeat straightline.
-    eapply Proper_call; cycle -1; [eapply H0|try eabstract (solve [ Morphisms.solve_proper ])..]; [ .. | intros ? ? ? ? ].
-    ssplit; [exact H28|exact H27|..]; try solve_bounds.
-    ecancel_assumption.
+    single_step.
 
-    repeat straightline.
-    cbv [FElem] in *.
-    repeat match goal with
-    | |- context [anybytes ?a _ _] =>
-        match goal with
-        | H: _ ?a' |- context [map.split ?a' _ _] =>
-            seprewrite_in (@Bignum.Bignum_to_bytes _ _ _ _ _ _ felem_size_in_words a) H
-        end
-    end.
-    extract_ex1_and_emp_in H42.
+    3: {
+      repeat straightline.
+      repeat match goal with
+      | |- context [anybytes ?a _ _] =>
+          match goal with
+          | H: ?P ?a' |- context [map.split ?a' _ _] =>
+            match P with context [FElem a ?x] =>
+              seprewrite_in (felem_to_bytearray a) H; pose proof (ws2bs_felem_length x)
+            end
+          end
+      end.
 
-    repeat straightline.
-    exists x5,x6,x7,x8,x9; ssplit. 3-7:solve_bounds.
-    exact H35. exact H36.
+      repeat straightline.
+      exists x5,x6,x7,x8,x9; ssplit. 3-7:solve_bounds.
+      eassumption.
+      eassumption.
 
-    ecancel_assumption.
+      ecancel_assumption.
+    }
+    eassumption.
+    eassumption.
   Qed.
 
   Lemma secp256k1_zdau_ok: program_logic_goal_for_function! secp256k1_zdau.
@@ -717,15 +712,15 @@ Section WithParameters.
     do 43 single_step.
 
     repeat straightline.
-    cbv [FElem] in *.
     repeat match goal with
     | |- context [anybytes ?a _ _] =>
         match goal with
-        | H: _ ?a' |- context [map.split ?a' _ _] =>
-            seprewrite_in (@Bignum.Bignum_to_bytes _ _ _ _ _ _ felem_size_in_words a) H
+        | H: ?P ?a' |- context [map.split ?a' _ _] =>
+          match P with context [FElem a ?x] =>
+            seprewrite_in (felem_to_bytearray a) H; pose proof (ws2bs_felem_length x)
+          end
         end
     end.
-    extract_ex1_and_emp_in H208.
 
     repeat straightline.
     exists x33,x36,x38,x41,x23; ssplit. 3-7:solve_bounds.

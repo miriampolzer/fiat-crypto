@@ -159,7 +159,6 @@ Section WithParameters.
 
   Local Coercion F.to_Z : F >-> Z.
   Local Notation "m =* P" := ((P%sep) m) (at level 70, only parsing).
-  Local Notation "xs $@ a" := (Array.array ptsto (word.of_Z 1) a xs) (at level 10, format "xs $@ a").
 
   Local Notation FElem := (FElem(FieldRepresentation:=frep256k1)).
   Local Notation word := (BasicC64Semantics.word).
@@ -174,10 +173,11 @@ Section WithParameters.
     { requires t m :=
         vx = feval x /\
         bounded_by loose_bounds x /\
-        m =* Placeholder zK z * (FElem xK x) * R;
+        Datatypes.length z = felem_size_in_bytes /\
+        m =* z$@zK * (FElem xK x) * R;
       ensures t' m' :=
         t = t' /\
-        exists z',
+        exists z' : felem,
         feval z' = (F.inv vx) /\
         bounded_by tight_bounds z' /\
         m' =* (FElem zK z') * (FElem xK x) * R
@@ -203,19 +203,10 @@ Section WithParameters.
       | H: bounded_by _ ?x |- bounded_by _ ?x => apply H
       end.
 
-  Local Ltac solve_stack :=
-    (* Rewrites the `stack$@a` term in H to use a Bignum instead *)
-    cbv [FElem];
-    match goal with
-    | H: _%sep ?m |- (Bignum.Bignum felem_size_in_words ?a _ * _)%sep ?m =>
-        seprewrite_in (@Bignum.Bignum_of_bytes _ _ _ _ _ _ 4 a) H
-    end;
-    [> transitivity 32%nat; trivial | ];
-    (* proves the memory matches up *)
-    use_sep_assumption; cancel; cancel_seps_at_indices 0%nat 0%nat; cbn; [> trivial | eapply RelationClasses.reflexivity].
+  Local Ltac solve_length := solve [rewrite ?ws2bs_felem_length; try lia; change felem_size_in_bytes with 32 in *; lia].
 
   Local Ltac single_step :=
-    repeat straightline; straightline_call; ssplit; try solve_mem; try solve_bounds; try solve_stack.
+    repeat straightline; straightline_call; ssplit; try solve_mem; try solve_bounds; try solve_length.
 
   Lemma spec_of_shift functions tr mem loc post :
     forall var to (Hvar: var <> "i") (Hto: 2 <= to < 2^32) pvar vvar R,
@@ -270,7 +261,8 @@ Section WithParameters.
     rewrite map.get_put_diff by congruence. eauto.
     eexists. split. rewrite map.get_put_diff by congruence. eauto.
     reflexivity.
-    single_step. repeat straightline.
+    single_step.
+    repeat straightline.
     eexists. split.
     eexists. split. apply map.get_put_same. cbn. reflexivity.
     eexists. split. split; [reflexivity|].
@@ -289,90 +281,40 @@ Section WithParameters.
     eexists; ssplit; eassumption.
   Qed.
 
+(* array1 -> bytes for ecancel_assumption_impl. *)
+Hint Extern 1 (Lift1Prop.impl1 (array ptsto (word.of_Z 1) ?px ?x) (sepclause_of_map (map.of_list_word_at ?px _))) => (erewrite (array1_iff_eq_of_list_word_at _ _ ); [exact impl1_refl | lia] ) : ecancel_impl.
+
   Lemma secp256k1_inv_ok : program_logic_goal_for_function! secp256k1_inv.
   Proof.
     Strategy -1000 [un_xbounds bin_xbounds bin_ybounds un_square bin_mul bin_add bin_carry_add bin_sub un_outbounds bin_outbounds].
 
     repeat single_step.
-    destruct H64 as (-> & -> & ? & ? & ? & ?).
-    eexists; split; [reflexivity|].
-    eapply spec_of_shift. congruence. lia. auto. reflexivity.
-    ecancel_assumption. eassumption.
-    repeat single_step.
-    destruct H82 as (-> & -> & ? & ? & ? & ?).
-    eexists; split; [reflexivity|].
-    eapply spec_of_shift. congruence. lia. auto. reflexivity.
-    ecancel_assumption. eassumption.
-    repeat single_step.
-    destruct H91 as (-> & -> & ? & ? & ? & ?).
-    eexists; split; [reflexivity|].
-    eapply spec_of_shift. congruence. lia. auto. reflexivity.
-    ecancel_assumption. eassumption.
-    repeat single_step.
-    destruct H100 as (-> & -> & ? & ? & ? & ?).
-    eexists; split; [reflexivity|].
-    eapply spec_of_shift. congruence. lia. auto. reflexivity.
-    ecancel_assumption. eassumption.
-    repeat single_step.
-    destruct H109 as (-> & -> & ? & ? & ? & ?).
-    eexists; split; [reflexivity|].
-    eapply spec_of_shift. congruence. lia. auto. reflexivity.
-    ecancel_assumption. eassumption.
-    repeat single_step.
-    destruct H124 as (-> & -> & ? & ? & ? & ?).
-    eexists; split; [reflexivity|].
-    eapply spec_of_shift. congruence. lia. auto. reflexivity.
-    ecancel_assumption. eassumption.
-    repeat single_step.
-    destruct H130 as (-> & -> & ? & ? & ? & ?).
-    eexists; split; [reflexivity|].
-    eapply spec_of_shift. congruence. lia. auto. reflexivity.
-    ecancel_assumption. eassumption.
-    repeat single_step.
-    destruct H139 as (-> & -> & ? & ? & ? & ?).
-    eexists; split; [reflexivity|].
-    eapply spec_of_shift. congruence. lia. auto. reflexivity.
-    ecancel_assumption. eassumption.
-    repeat single_step.
-    destruct H148 as (-> & -> & ? & ? & ? & ?).
-    eexists; split; [reflexivity|].
-    eapply spec_of_shift. congruence. lia. auto. reflexivity.
-    ecancel_assumption. eassumption.
-    repeat single_step.
-    destruct H157 as (-> & -> & ? & ? & ? & ?).
-    eexists; split; [reflexivity|].
-    eapply spec_of_shift. congruence. lia. auto. reflexivity.
-    ecancel_assumption. eassumption.
-    repeat single_step.
-    destruct H169 as (-> & -> & ? & ? & ? & ?).
-    eexists; split; [reflexivity|].
-    eapply spec_of_shift. congruence. lia. auto. reflexivity.
-    ecancel_assumption. eassumption.
-    repeat single_step.
-    destruct H178 as (-> & -> & ? & ? & ? & ?).
-    eexists; split; [reflexivity|].
-    eapply spec_of_shift. congruence. lia. auto. reflexivity.
-    ecancel_assumption. eassumption.
-    repeat single_step.
-
+    
+    repeat (repeat straightline_cleanup;
+    eexists; split; [reflexivity|];
+    eapply spec_of_shift; [congruence| lia| auto| reflexivity|
+    | eassumption| ]; [ecancel_assumption| repeat single_step]).
+    
     repeat straightline.
-    cbv [FElem] in *.
     repeat match goal with
     | |- context [anybytes ?a _ _] =>
         match goal with
-        | H: _ ?a' |- context [map.split ?a' _ _] =>
-            seprewrite_in (Bignum.Bignum_to_bytes felem_size_in_words a) H
+        | H: ?P ?a' |- context [map.split ?a' _ _] =>
+          match P with context [FElem a ?x] =>
+            seprewrite_in (felem_to_bytearray a) H; pose proof (ws2bs_felem_length x)
+          end
         end
     end.
-    extract_ex1_and_emp_in H194.
 
     repeat straightline.
     exists x42. ssplit; [|solve_bounds|ecancel_assumption].
     repeat match goal with
            | H : feval ?a = _ |- context [feval ?a] => rewrite H
            end.
-    cbv [un_model bin_model un_square bin_mul].
+    destruct x.
     unfold vx. rewrite (@F.Fq_inv_fermat _ _ two_lt_M).
+    cbv [un_model bin_model un_square bin_mul felem_to_list proj1_sig].
+    
     rewrite F_M_pos.
     repeat match goal with
     | |- context [F.pow (F.pow (feval x) ?a) ?b] => rewrite (F.pow_pow_l (feval x) a b)

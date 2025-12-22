@@ -21,6 +21,7 @@ Require Import Crypto.Bedrock.Group.ScalarMult.LadderStep.
 Require Import Crypto.Bedrock.Group.ScalarMult.CSwap.
 Require Import Crypto.Bedrock.Group.ScalarMult.MontgomeryLadder.
 Require Import Crypto.Bedrock.End2End.X25519.Field25519.
+Require Import Crypto.Bedrock.Specs.Field.
 Require Import Crypto.Bedrock.End2End.X25519.clamp.
 Local Open Scope string_scope.
 Import ListNotations.
@@ -68,6 +69,10 @@ Import ProgramLogic.Coercions.
 Local Notation "m =* P" := ((P%sep) m) (at level 70, only parsing) (* experiment*).
 Local Notation "xs $@ a" := (Array.array ptsto (word.of_Z 1) a xs) (at level 10, format "xs $@ a").
 
+Local Existing Instance field_parameters.
+Local Existing Instance frep25519.
+Local Existing Instance frep25519_ok.
+
 Definition x25519_spec s P := le_split 32 (M.X0 (Curve25519.M.scalarmult (Curve25519.clamp (le_combine s)) P)).
 Lemma length_x25519_spec s P : length (x25519_spec s P) = 32%nat. Proof. apply length_le_split. Qed.
 
@@ -95,6 +100,20 @@ Local Arguments word.wrap : simpl never.
 Local Arguments word.unsigned : simpl never.
 Local Arguments word.of_Z : simpl never.
 
+
+    (* array1 -> bytes for ecancel_assumption_impl. TODO move this to a central place *)
+    Hint Extern 1 (Lift1Prop.impl1 (Array.array ptsto (word.of_Z 1) ?px ?x) (sepclause_of_map (map.of_list_word_at ?px _))) => (erewrite (Array.array1_iff_eq_of_list_word_at _ _ ); [exact impl1_refl | Lia.lia] ) : ecancel_impl.
+
+
+  Local Ltac solve_length := solve [change felem_size_in_bytes with 40 in *; Lia.lia].
+
+  (* bytearray -> FElem for ecancel_assumption_impl. This needs to be local because it needs solve_length which uses the felem byte length.
+  TODO I could create a version that tries out common byte lengths, or make the programs not use constants? But I think properly
+  dealing here is a separate refactoring. *)
+  Hint Extern 1 (Lift1Prop.impl1 (Array.array ptsto (word.of_Z 1) ?p ?bs) (FElem ?p _)) => 
+      (unshelve (erewrite (felem_from_bytearray _ _ _)); [solve_length | exact impl1_refl]) : ecancel_impl.
+
+
 Lemma x25519_ok : program_logic_goal_for_function! x25519.
 Proof.
   repeat straightline.
@@ -105,7 +124,8 @@ Proof.
 
   straightline_call; ssplit.
   { eexists. ecancel_assumption. }
-  { ecancel_assumption_impl. }
+  2: { ecancel_assumption_impl. }
+  { change felem_size_in_bytes with 40 in *. Lia.lia. }
 
   { unfold Field.bytes_in_bounds, frep25519, field_representation, Signature.field_representation, Representation.frep.
     match goal with |- ?P ?x ?z => let y := eval cbv in x in change (P y z) end; cbn.
@@ -120,10 +140,8 @@ Proof.
     eapply byte.unsigned_range. }
   repeat straightline.
 
-  seprewrite_in (@Bignum.Bignum_of_bytes _ _ _ _ _ _ 10 a2) H24. { transitivity 40%nat; trivial. }
-
   straightline_call; ssplit.
-  { unfold FElem in *; extract_ex1_and_emp_in_goal; ssplit; try ecancel_assumption_impl.
+  { unfold Compilation2.FElem in *. extract_ex1_and_emp_in_goal; ssplit; try ecancel_assumption_impl.
     all: eauto.
     instantiate (1:=None). exact I. }
   { reflexivity. }
@@ -137,25 +155,33 @@ Proof.
   | H : context [montladder_gallina] |- _ =>
       rewrite (@montladder_gallina_equiv_affine (Curve25519.p) _ _ (Curve25519.field)) with
       (b_nonzero:=Curve25519.M.b_nonzero) (char_ge_3:=Curve25519.char_ge_3) in H;
-      [ unfold FElem, Field.FElem in H; extract_ex1_and_emp_in H | Lia.lia | vm_decide | apply M.a2m4_nonsq ]
+      [ unfold Compilation2.FElem; extract_ex1_and_emp_in H | Lia.lia | vm_decide | apply M.a2m4_nonsq ]
   end.
+  unfold Compilation2.FElem in *; extract_ex1_and_emp_in_hyps.
   straightline_call; ssplit.
   { ecancel_assumption. }
   { transitivity 32%nat; auto. }
   { eexists.
-    unfold FElem, Field.FElem in *; extract_ex1_and_emp_in_goal; ssplit.
+    unfold Compilation2.FElem in *. extract_ex1_and_emp_in_goal; extract_ex1_and_emp_in_hyps; ssplit.
     ecancel_assumption. }
   { intuition idtac. }
   repeat straightline_cleanup.
   repeat straightline.
-
-  cbv [Field.FElem] in *.
-  repeat seprewrite_in @Bignum.Bignum_to_bytes H32; extract_ex1_and_emp_in H32.
+  (*TODO make this available via Field.v? repeated here and in addchain *)
+    repeat match goal with
+    | |- context [anybytes ?a _ _] =>
+        match goal with
+        | H: ?P ?a' |- context [map.split ?a' _ _] =>
+          match P with context [FElem a ?x] =>
+            seprewrite_in (felem_to_bytearray a) H; pose proof (ws2bs_felem_length x)
+          end
+        end
+    end.
   pose proof length_le_split 32 (Curve25519.clamp (le_combine s)).
   repeat straightline.
   cbv [x25519_spec].
   use_sep_assumption; cancel.
-  rewrite H36, le_combine_split.
+  rewrite H34, le_combine_split.
   do 7 Morphisms.f_equiv.
   pose proof clamp_range (le_combine s).
   change (Z.of_nat (Z.to_nat (Z.log2 (Z.pos order)))) with 255.
@@ -170,21 +196,19 @@ Proof.
   straightline_call; ssplit; try ecancel_assumption; repeat straightline; try listZnWords; [].
 
   straightline_call; ssplit.
-  { cbv [Field.FElem]. cbn. cbv [n]. ecancel_assumption_impl. }
+  2: { ecancel_assumption_impl. }
+  solve_length.
   repeat straightline.
 
-  seprewrite_in (@Bignum.Bignum_of_bytes _ _ _ _ _ _ 10 a2) H21. { transitivity 40%nat; trivial. }
-
   straightline_call; ssplit.
-  { unfold FElem, Field.FElem in *; extract_ex1_and_emp_in_goal; ssplit.
-       { use_sep_assumption. cancel; repeat ecancel_step.
-       cancel_seps_at_indices 0%nat 0%nat; trivial. cbn [seps]. reflexivity. }
+  { unfold Compilation2.FElem in *; extract_ex1_and_emp_in_goal; ssplit.
+       { ecancel_assumption_impl. }
     all : eauto.
     { instantiate (1:=None). exact I. } }
   { reflexivity. }
   { rewrite length_le_split. vm_compute. inversion 1. }
   repeat straightline.
-  unfold FElem in H26. extract_ex1_and_emp_in H26.
+  unfold Compilation2.FElem in H26. extract_ex1_and_emp_in H26.
   straightline_call; ssplit.
   { ecancel_assumption. }
   { transitivity 32%nat; auto. }
@@ -193,16 +217,22 @@ Proof.
   repeat straightline_cleanup.
   repeat straightline.
 
-  cbv [Field.FElem] in *.
-  seprewrite_in @Bignum.Bignum_to_bytes H29.
-  seprewrite_in @Bignum.Bignum_to_bytes H29.
-  extract_ex1_and_emp_in H29.
+  (*TODO make this available via Field.v? repeated here and in addchain *)
+    repeat match goal with
+    | |- context [anybytes ?a _ _] =>
+        match goal with
+        | H: ?P ?a' |- context [map.split ?a' _ _] =>
+          match P with context [FElem a ?x] =>
+            seprewrite_in (felem_to_bytearray a) H; pose proof (ws2bs_felem_length x)
+          end
+        end
+    end.
   pose proof length_le_split 32 (Curve25519.clamp (le_combine s)).
 
   repeat straightline; intuition eauto.
   cbv [x25519_spec].
   use_sep_assumption; cancel.
-  rewrite H33, le_combine_split.
+  rewrite H31, le_combine_split.
   do 7 Morphisms.f_equiv.
   pose proof clamp_range (le_combine s).
   change (Z.of_nat (Z.to_nat (Z.log2 (Z.pos order)))) with 255.
