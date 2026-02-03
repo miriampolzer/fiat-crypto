@@ -219,7 +219,7 @@ Local Instance spec_of_p256_point_mul_signed : spec_of "p256_point_mul_signed" :
   { requires t m :=
     m =* out$@p_out * bytearray p_sscalar sscalar * P$@p_P * R /\
     length out = length P /\ length sscalar = num_limbs /\
-    2 * positional_signed_bytes (2^w) sscalar < p256_group_order /\
+    positional_signed_bytes (2^w) sscalar < p256_group_order /\
     Forall (fun b => (-2^w + 2 <= 2*(byte.signed b) <= 2^w)) sscalar;
     ensures T M := exists (Q : point) (* Q = [sscalar]P *),
       M =* Q$@p_out * bytearray p_sscalar sscalar * P$@p_P * R /\ (* ... *)
@@ -563,6 +563,29 @@ Proof.
           admit. (* forall and skipn, sscalar is bound*)
         }
         {
+          epose proof suffix_bound_by_group_order as O1.
+          epose proof num_positive_suffix_non_negative as O2.
+          split.
+          {
+            rewrite <- skipn_map.
+            assert (0 <= positional (2 ^ Recode.w) (ListDef.skipn (Z.to_nat v) (map byte.signed sscalar))); try lia.
+            apply O2.
+            {
+              apply Forall_map.
+              assumption.
+            }
+            {
+              admit. (* 0 < positional (2 ^ w) (map byte.signed sscalar) - we will need to add this to the spec. *)
+            }
+            {
+              rewrite map_length. lia.
+            }
+          }
+          {
+            unfold positional_signed_bytes in H7.
+            rewrite <- skipn_map.
+            assert ()
+          }
           admit. (*should follow from h7 and h13, if the whole thing is bounded, then any suffix will be bounded*)
 
         }
