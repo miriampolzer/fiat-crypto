@@ -12,7 +12,6 @@ WeakestPrecondition
 ProgramLogic.Coercions
 SeparationLogic
 letexists
-BasicC64Semantics
 ListIndexNotations
 SepAutoArray
 OfListWord
@@ -30,36 +29,6 @@ Local Open Scope Z_scope.
 Local Open Scope list_scope.
 Local Open Scope string_scope.
 
-Local Notation "xs $@ a" := (map.of_list_word_at a xs)
-(at level 10, format "xs $@ a").
-Local Notation "$ n" := (match word.of_Z n return word with w => w end) (at level 9, format "$ n").
-Local Notation "p .+ n" := (word.add p (word.of_Z n)) (at level 50, format "p .+ n", left associativity).
-Local Coercion F.to_Z : F >-> Z.
-
-#[local] Notation sizeof_point := 96%nat.
-
-Definition p256_precompute_multiples := func! (p_table, p_P) {
-  p256_point_set_zero(p_table);
-  br_memcpy(p_table + $sizeof_point, p_P, $sizeof_point);
-
-  i = $2;
-  while ($17 - i) {
-    if (i & $1) {
-      unpack! ok = p256_point_add_nz_nz_neq(
-        p_table + ($sizeof_point * i),
-        p_table + ($sizeof_point * (i - $1)),
-        p_P
-      );
-      $(cmd.unset "ok")
-    } else {
-      p256_point_double(
-        p_table + ($sizeof_point * i),
-        p_table + ($sizeof_point * (i >> $1))
-      )
-    };
-    i = i + $1
-  }
-}.
 
 Import Crypto.Spec.WeierstrassCurve
 Crypto.Curves.Weierstrass.Affine
@@ -69,6 +38,7 @@ Curves.Weierstrass.P256
 Crypto.Bedrock.P256.Specs
 bedrock2.ZnWords.
 Require Import bedrock2.bottom_up_simpl.
+
 
 Module W.
   (* Creates 0..n*P as list. *)
@@ -133,6 +103,86 @@ Proof.
     reflexivity.
   }
 Qed.
+From Coq Require Import String List. Local Open Scope string_scope. Local Open Scope list_scope.
+Require Import coqutil.Map.Interface.
+Require Import coqutil.Word.Interface.
+
+From Coq Require Import BinInt BinNat Init.Byte.
+Section WithSemantics.
+Context {width} {BW : Bitwidth.Bitwidth width} {word : word.word width}.
+Context {word_ok: word.ok word}.
+Context {locals : Interface.map.map string word}.
+Context {locals_ok : map.ok locals}.
+Context {mem : Interface.map.map word byte}.
+Context {ext_spec : Semantics.ExtSpec}.
+Context {mem_ok : map.ok mem}.
+(* todo weed out context *)
+
+Local Notation "xs $@ a" := (map.of_list_word_at a xs)
+  (at level 10, format "xs $@ a").
+Local Notation "$ n" := (match word.of_Z n return word with w => w end) (at level 9, format "$ n").
+Local Notation "p .+ n" := (word.add p (word.of_Z n)) (at level 50, format "p .+ n", left associativity).
+Local Coercion F.to_Z : F >-> Z.
+
+#[local] Notation sizeof_point := 96%nat.
+
+Definition p256_precompute_multiples := func! (p_table, p_P) {
+  p256_point_set_zero(p_table);
+  br_memcpy(p_table + $sizeof_point, p_P, $sizeof_point);
+
+  i = $2;
+  while ($17 - i) {
+    if (i & $1) {
+      unpack! ok = p256_point_add_nz_nz_neq(
+        p_table + ($sizeof_point * i),
+        p_table + ($sizeof_point * (i - $1)),
+        p_P
+      );
+      $(cmd.unset "ok")
+    } else {
+      p256_point_double(
+        p_table + ($sizeof_point * i),
+        p_table + ($sizeof_point * (i >> $1))
+      )
+    };
+    i = i + $1
+  }
+}.
+
+Definition p256_select_point := func! (p_out, p_table, idx) {
+  p256_point_set_zero(p_out);
+
+  i = $0;
+  while ($17 - i) {
+    (* mismatch is 0 iff i == idx *)
+    mismatch = i ^ idx;
+    p_curr = p_table + ($sizeof_point * i);
+
+    (* if mismatch is 0 (match), we pull the coordinate from p_curr.
+       if mismatch is non-zero, we copy p_out back to itself. *)
+    p256_coord_select_znz(p_out,       mismatch, p_curr,       p_out);
+    p256_coord_select_znz(p_out + $32, mismatch, p_curr + $32, p_out + $32);
+    p256_coord_select_znz(p_out + $64, mismatch, p_curr + $64, p_out + $64);
+
+    i = i + $1
+  }
+}.
+
+Definition p256_get_multiple := func! (p_out, p_table, k) {
+  sign = (k >> $(width - 1)) & $1;
+  idx = (k & $(Z.lnot (Z.shiftl 1 (width - 1)))); (* not (1>>63) - filters out everything but the sign. *)
+
+  (* Copy the point in positive form. TODO need constant time select here. *)
+  p256_select_point(p_out, p_table, idx);
+
+  (* calculate -y, and select to copy y or -y based on the sign of k. *)
+  stackalloc 32 as p_y_opp;
+  br_memcpy(p_y_opp, p_out + $32, $32);
+  p256_coord_opp(p_y_opp);
+
+  p256_coord_select_znz(p_out + $32, sign, p_out + $32, p_y_opp)
+}.
+
 
 Notation pointarray := (array (fun (p : word.rep) (Q : point) => sepclause_of_map ((to_bytes Q)$@p)) (word.of_Z (Z.of_nat 96))).
 
@@ -171,6 +221,7 @@ Proof.
   { eapply array_index_nat_inbounds with (n:=n). lia. }
   rewrite <- hd_skipn_nth_default, nth_default_eq.
   cancel.
+  (* TODO this stops working with the context. missing typeclass instances or faulty implicit params?*)
   do 2 (cancel_seps_at_indices 0%nat 0%nat; [match_up_pointers; exact eq_refl|]).
   ecancel.
 Qed.
