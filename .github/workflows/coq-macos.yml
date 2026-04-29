@@ -13,7 +13,6 @@ on:
 
 jobs:
   build:
-    timeout-minutes: 360
 
     strategy:
       fail-fast: false
@@ -21,13 +20,11 @@ jobs:
         # macOS 12, 13, 14-large, 15-large are x86_64; macOS 14, 14-xlarge, 15, 15-xlarge are arm64
         include:
         - os: { name: 'macOS 15', arch: 'x86_64', runs-on: 'macos-15-intel' }
-          ocaml-compiler: '4.13.0'
+          ocaml-compiler: '4.14.2'
         - os: { name: 'macOS 14', arch: 'arm64' , runs-on: 'macos-14' }
           ocaml-compiler: '4.14.2'
 
     runs-on: ${{ matrix.os.runs-on }}
-
-    needs: quick-verify
 
     concurrency:
       group: ${{ github.workflow }}-${{ matrix.os.runs-on }}-${{ matrix.ocaml-compiler }}-${{ github.head_ref || github.run_id }}
@@ -47,43 +44,6 @@ jobs:
     - uses: actions/checkout@v6
       with:
         submodules: recursive
-    - name: Runner Stabilization
-      run: |
-        # 1. Intel-specific SMC polling fix
-        if [ "$(uname -m)" == "x86_64" ]; then
-          sudo defaults -currentHost write /Library/Preferences/com.apple.powerlogd SMCMonitorCadence 0
-        fi
-
-        # 2. Disable Spotlight indexing
-        sudo mdutil -a -i off || true
-
-        # 3. Unload and kill problematic background services
-        SERVICES=(
-          com.apple.PerfPowerServices
-          com.apple.spindump
-          com.apple.tailspind
-          com.apple.CoreDuetDaemon
-          com.apple.mediaanalysisd
-        )
-        for s in "${SERVICES[@]}"; do
-          sudo launchctl unload -w "/System/Library/LaunchDaemons/${s}.plist" 2>/dev/null || true
-        done
-        sudo killall PerfPowerServices spindump tailspind distnoted mediaanalysisd 2>/dev/null || true
-
-        # 4. Disable scheduled updates and increase priority
-        sudo softwareupdate --schedule off
-        sudo renice -n -15 -p $$
-    - name: CI Performance Diagnostics
-      run: |
-        echo "::group::CPU usage"
-        ps auxww | grep -E "%CPU|PerfPowerServices" | grep -v grep || true
-        echo "::endgroup::"
-        echo "::group::System Load"
-        top -l 1 | head -n 10
-        echo "::endgroup::"
-        echo "::group::Spotlight Status"
-        sudo mdutil -s /
-        echo "::endgroup::"
     - name: Set up OCaml
       uses: ocaml/setup-ocaml@v3
       with:
@@ -194,7 +154,6 @@ jobs:
         path: dist/fiat_crypto
 
   test-standalone:
-    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -207,43 +166,6 @@ jobs:
     needs: [build, combine-standalone]
     steps:
     - uses: actions/checkout@v6
-    - name: Runner Stabilization
-      run: |
-        # 1. Intel-specific SMC polling fix
-        if [ "$(uname -m)" == "x86_64" ]; then
-          sudo defaults -currentHost write /Library/Preferences/com.apple.powerlogd SMCMonitorCadence 0
-        fi
-
-        # 2. Disable Spotlight indexing
-        sudo mdutil -a -i off || true
-
-        # 3. Unload and kill problematic background services
-        SERVICES=(
-          com.apple.PerfPowerServices
-          com.apple.spindump
-          com.apple.tailspind
-          com.apple.CoreDuetDaemon
-          com.apple.mediaanalysisd
-        )
-        for s in "${SERVICES[@]}"; do
-          sudo launchctl unload -w "/System/Library/LaunchDaemons/${s}.plist" 2>/dev/null || true
-        done
-        sudo killall PerfPowerServices spindump tailspind distnoted mediaanalysisd 2>/dev/null || true
-
-        # 4. Disable scheduled updates and increase priority
-        sudo softwareupdate --schedule off
-        sudo renice -n -15 -p $$
-    - name: CI Performance Diagnostics
-      run: |
-        echo "::group::CPU usage"
-        ps auxww | grep -E "%CPU|PerfPowerServices" | grep -v grep || true
-        echo "::endgroup::"
-        echo "::group::System Load"
-        top -l 1 | head -n 10
-        echo "::endgroup::"
-        echo "::group::Spotlight Status"
-        sudo mdutil -s /
-        echo "::endgroup::"
     - name: Download standalone MacOS${{ matrix.arch }}
       uses: actions/download-artifact@v8
       with:
@@ -322,48 +244,3 @@ jobs:
       if: ${{ needs.test-standalone.result != 'success' }}
     - run: echo 'publish-standalone failed' && false
       if: ${{ needs.publish-standalone.result != 'success' }}
-
-  quick-verify:
-    strategy:
-      matrix:
-        os: [macos-15-intel, macos-14]
-    runs-on: ${{ matrix.os }}
-    steps:
-    - uses: actions/checkout@v6
-    - name: Runner Stabilization
-      run: |
-        # 1. Intel-specific SMC polling fix
-        if [ "$(uname -m)" == "x86_64" ]; then
-          sudo defaults -currentHost write /Library/Preferences/com.apple.powerlogd SMCMonitorCadence 0
-        fi
-
-        # 2. Disable Spotlight indexing
-        sudo mdutil -a -i off || true
-
-        # 3. Unload and kill problematic background services
-        SERVICES=(
-          com.apple.PerfPowerServices
-          com.apple.spindump
-          com.apple.tailspind
-          com.apple.CoreDuetDaemon
-          com.apple.mediaanalysisd
-        )
-        for s in "${SERVICES[@]}"; do
-          sudo launchctl unload -w "/System/Library/LaunchDaemons/${s}.plist" 2>/dev/null || true
-        done
-        sudo killall PerfPowerServices spindump tailspind distnoted mediaanalysisd 2>/dev/null || true
-
-        # 4. Disable scheduled updates and increase priority
-        sudo softwareupdate --schedule off
-        sudo renice -n -15 -p $$
-    - name: CI Performance Diagnostics
-      run: |
-        echo "::group::CPU usage"
-        ps auxww | grep -E "%CPU|PerfPowerServices" | grep -v grep || true
-        echo "::endgroup::"
-        echo "::group::System Load"
-        top -l 1 | head -n 10
-        echo "::endgroup::"
-        echo "::group::Spotlight Status"
-        sudo mdutil -s /
-        echo "::endgroup::"
