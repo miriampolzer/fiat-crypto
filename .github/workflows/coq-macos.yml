@@ -12,6 +12,317 @@ on:
     - cron: '0 0 1 * *'
 
 jobs:
+  build:
+    timeout-minutes: 360
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS 12, 13, 14-large, 15-large are x86_64; macOS 14, 14-xlarge, 15, 15-xlarge are arm64
+        include:
+        - os: { name: 'macOS 15', arch: 'x86_64', runs-on: 'macos-15-intel' }
+          ocaml-compiler: '4.13.0'
+        - os: { name: 'macOS 14', arch: 'arm64' , runs-on: 'macos-14' }
+          ocaml-compiler: '4.14.2'
+
+    runs-on: ${{ matrix.os.runs-on }}
+
+    needs: quick-verify
+
+    concurrency:
+      group: ${{ github.workflow }}-${{ matrix.os.runs-on }}-${{ matrix.ocaml-compiler }}-${{ github.head_ref || github.run_id }}
+      cancel-in-progress: true
+
+    env:
+      NJOBS: "2"
+      COQ_VERSION: "8.20.0"
+      COQCHKEXTRAFLAGS: ""
+      SKIP_BEDROCK2: "0"
+      OPAMYES: "true"
+      OPAMCONFIRMLEVEL: "unsafe-yes"
+
+    name: ${{ matrix.os.name }} (${{ matrix.os.arch }})
+
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        submodules: recursive
+    - name: Runner Stabilization
+      run: |
+        # 1. Intel-specific SMC polling fix
+        if [ "$(uname -m)" == "x86_64" ]; then
+          sudo defaults -currentHost write /Library/Preferences/com.apple.powerlogd SMCMonitorCadence 0
+        fi
+
+        # 2. Disable Spotlight indexing
+        sudo mdutil -a -i off || true
+
+        # 3. Unload and kill problematic background services
+        SERVICES=(
+          com.apple.PerfPowerServices
+          com.apple.spindump
+          com.apple.tailspind
+          com.apple.CoreDuetDaemon
+          com.apple.mediaanalysisd
+        )
+        for s in "${SERVICES[@]}"; do
+          sudo launchctl unload -w "/System/Library/LaunchDaemons/${s}.plist" 2>/dev/null || true
+        done
+        sudo killall PerfPowerServices spindump tailspind distnoted mediaanalysisd 2>/dev/null || true
+
+        # 4. Disable scheduled updates and increase priority
+        sudo softwareupdate --schedule off
+        sudo renice -n -15 -p $$
+    - name: CI Performance Diagnostics
+      run: |
+        echo "::group::CPU usage"
+        ps auxww | grep -E "%CPU|PerfPowerServices" | grep -v grep || true
+        echo "::endgroup::"
+        echo "::group::System Load"
+        top -l 1 | head -n 10
+        echo "::endgroup::"
+        echo "::group::Spotlight Status"
+        sudo mdutil -s /
+        echo "::endgroup::"
+    - name: Set up OCaml
+      uses: ocaml/setup-ocaml@v3
+      with:
+        ocaml-compiler: ${{ matrix.ocaml-compiler }}
+
+    - name: Work around https://github.com/ocaml/opam-repository/pull/26891#issuecomment-2486598516
+      run: |
+        # Alternative: brew update; brew upgrade; brew install pkgconf
+        brew unlink pkg-config
+        brew install pkgconf
+        brew unlink pkgconf
+        brew link pkg-config
+    - name: Install system dependencies
+      run: brew install gnu-time gnu-sed coreutils grep
+    - run: opam update
+    - run: opam pin add coq ${COQ_VERSION}
+    - run: opam install js_of_ocaml
+    - name: echo build params
+      run: etc/ci/describe-system-config-macos.sh
+    - name: deps
+      run: opam exec -- etc/ci/github-actions-make.sh -j2 deps
+    - name: all-except-js-of-ocaml
+      run: opam exec -- etc/ci/github-actions-make.sh -j2 all-except-js-of-ocaml
+    - name: pre-standalone-extracted
+      run: opam exec -- etc/ci/github-actions-make.sh -j2 pre-standalone-extracted
+    - name: all
+      run: opam exec -- etc/ci/github-actions-make.sh -j2 all
+    - run: find . -name "*.timing" | xargs tar -czvf timing-files.tgz
+      if: failure()
+    - name: upload generated timing files
+      uses: actions/upload-artifact@v7
+      with:
+        name: timing-files-${{ matrix.os.runs-on }}
+        path: timing-files.tgz
+      if: failure()
+    - name: install-standalone-unified-ocaml
+      run: opam exec -- etc/ci/github-actions-make.sh install-standalone-unified-ocaml BINDIR=dist
+    - name: install-standalone-js-of-ocaml
+      run: opam exec -- etc/ci/github-actions-make.sh install-standalone-js-of-ocaml
+    - name: only-test-amd64-files-lite
+      run: opam exec -- etc/ci/github-actions-make.sh -j2 only-test-amd64-files-lite SLOWEST_FIRST=1
+
+    - name: upload OCaml files
+      uses: actions/upload-artifact@v7
+      with:
+        name: ExtractionOCaml-${{ matrix.os.arch }}
+        path: src/ExtractionOCaml
+    - name: upload js_of_ocaml files
+      uses: actions/upload-artifact@v7
+      with:
+        name: ExtractionJsOfOCaml-${{ matrix.os.arch }}
+        path: src/ExtractionJsOfOCaml
+    - name: upload standalone files
+      uses: actions/upload-artifact@v7
+      with:
+        name: standalone-macos-${{ matrix.os.arch }}
+        path: dist/fiat_crypto
+    - name: upload standalone js files
+      uses: actions/upload-artifact@v7
+      with:
+        name: standalone-html-macos-${{ matrix.os.arch }}
+        path: fiat-html
+    - name: install
+      run: opam exec -- etc/ci/github-actions-make.sh EXTERNAL_DEPENDENCIES=1 SKIP_COQSCRIPTS_INCLUDE=1 install install-standalone-ocaml
+    - name: install-without-bedrock2
+      run: opam exec -- etc/ci/github-actions-make.sh EXTERNAL_DEPENDENCIES=1 SKIP_BEDROCK2=1 install-without-bedrock2 install-standalone-ocaml
+    - name: install-dev
+      run: opam exec -- etc/ci/github-actions-make.sh EXTERNAL_REWRITER=1 EXTERNAL_COQPRIME=1 install install-standalone-ocaml
+    - name: display timing info
+      run: cat time-of-build-pretty.log
+    - name: display per-line timing info
+      run: etc/ci/github-actions-display-per-line-timing.sh
+#    - name: upload timing and .vo info
+#      uses: actions/upload-artifact@v7
+#      with:
+#        name: build-outputs-${{ matrix.os.arch }}
+#        path: .
+#      if: always ()
+#    - name: validate
+#      run: |
+#        eval $(opam env)
+#        make TIMED=1 validate COQCHKFLAGS="-o ${COQCHKEXTRAFLAGS}"
+#      if: github.event_name != 'pull_request'
+
+  combine-standalone:
+    runs-on: macos-latest
+    needs: build
+    steps:
+    - uses: actions/checkout@v6
+    - name: Download standalone MacOS x86_64
+      uses: actions/download-artifact@v8
+      with:
+        name: standalone-macos-x86_64
+        path: dist-x86_64/
+    - name: Download standalone MacOS arm64
+      uses: actions/download-artifact@v8
+      with:
+        name: standalone-macos-arm64
+        path: dist-arm64/
+    - name: Create universal binary
+      run: |
+        mkdir -p dist
+        lipo -create -output dist/fiat_crypto dist-x86_64/fiat_crypto dist-arm64/fiat_crypto
+    - name: upload universal binary
+      uses: actions/upload-artifact@v7
+      with:
+        name: standalone-macos
+        path: dist/fiat_crypto
+
+  test-standalone:
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ['', '-x86_64', '-arm64']
+        os: ['macos-15-intel', 'macos-14', 'macos-latest']
+        exclude:
+          - os: 'macos-15-intel'
+            arch: '-arm64'
+    runs-on: ${{ matrix.os }}
+    needs: [build, combine-standalone]
+    steps:
+    - uses: actions/checkout@v6
+    - name: Runner Stabilization
+      run: |
+        # 1. Intel-specific SMC polling fix
+        if [ "$(uname -m)" == "x86_64" ]; then
+          sudo defaults -currentHost write /Library/Preferences/com.apple.powerlogd SMCMonitorCadence 0
+        fi
+
+        # 2. Disable Spotlight indexing
+        sudo mdutil -a -i off || true
+
+        # 3. Unload and kill problematic background services
+        SERVICES=(
+          com.apple.PerfPowerServices
+          com.apple.spindump
+          com.apple.tailspind
+          com.apple.CoreDuetDaemon
+          com.apple.mediaanalysisd
+        )
+        for s in "${SERVICES[@]}"; do
+          sudo launchctl unload -w "/System/Library/LaunchDaemons/${s}.plist" 2>/dev/null || true
+        done
+        sudo killall PerfPowerServices spindump tailspind distnoted mediaanalysisd 2>/dev/null || true
+
+        # 4. Disable scheduled updates and increase priority
+        sudo softwareupdate --schedule off
+        sudo renice -n -15 -p $$
+    - name: CI Performance Diagnostics
+      run: |
+        echo "::group::CPU usage"
+        ps auxww | grep -E "%CPU|PerfPowerServices" | grep -v grep || true
+        echo "::endgroup::"
+        echo "::group::System Load"
+        top -l 1 | head -n 10
+        echo "::endgroup::"
+        echo "::group::Spotlight Status"
+        sudo mdutil -s /
+        echo "::endgroup::"
+    - name: Download standalone MacOS${{ matrix.arch }}
+      uses: actions/download-artifact@v8
+      with:
+        name: standalone-macos${{ matrix.arch }}
+        path: dist/
+    - name: List files
+      run: find dist
+    - run: chmod +x dist/fiat_crypto
+    - name: Test files (${{ matrix.arch }} on ${{ matrix.os }})
+      run: |
+        echo "::group::file fiat_crypto"
+        file dist/fiat_crypto
+        echo "::endgroup::"
+        echo "::group::otool -L fiat_crypto"
+        otool -L dist/fiat_crypto
+        echo "::endgroup::"
+        echo "::group::lipo -info fiat_crypto"
+        lipo -info dist/fiat_crypto
+        echo "::endgroup::"
+        etc/ci/test-run-fiat-crypto.sh dist/fiat_crypto
+
+  publish-standalone:
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ['', '-x86_64', '-arm64']
+    runs-on: ubuntu-latest
+    needs: [build, combine-standalone]
+    permissions:
+      contents: write  # IMPORTANT: mandatory for making GitHub Releases
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        fetch-depth: 0 # Fetch all history for all tags and branches
+        tags: true     # Fetch all tags as well, `fetch-depth: 0` might be sufficient depending on Git version
+    - name: Download standalone MacOS${{ matrix.arch }}
+      uses: actions/download-artifact@v8
+      with:
+        name: standalone-macos${{ matrix.arch }}
+        path: dist/
+    - name: List files
+      run: find dist
+    - name: Rename files
+      run: |
+        arch="$(etc/ci/find-arch.sh dist/fiat_crypto)"
+        tag="$(git describe --tags HEAD)"
+        fname="Fiat-Cryptography_${tag}_macOS_${arch}"
+        echo "$fname"
+        mv dist/fiat_crypto "dist/$fname"
+        find dist
+    - name: Upload macOS-${{ matrix.arch }} artifacts to GitHub Release
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      # Upload to GitHub Release using the `gh` CLI.
+      # `dist/` contains the built packages
+      run: >-
+        gh release upload
+        '${{ github.ref_name }}' dist/**
+        --repo '${{ github.repository }}'
+      if: ${{ startsWith(github.ref, 'refs/tags/') && github.event_name == 'release' }}
+
+  macos-check-all:
+    runs-on: ubuntu-latest
+    needs: [build, test-standalone, publish-standalone]
+    if: always()
+    steps:
+    - run: echo 'build passed'
+      if: ${{ needs.build.result == 'success' }}
+    - run: echo 'test-standalone passed'
+      if: ${{ needs.test-standalone.result == 'success' }}
+    - run: echo 'publish-standalone passed'
+      if: ${{ needs.publish-standalone.result == 'success' }}
+    - run: echo 'build failed' && false
+      if: ${{ needs.build.result != 'success' }}
+    - run: echo 'test-standalone failed' && false
+      if: ${{ needs.test-standalone.result != 'success' }}
+    - run: echo 'publish-standalone failed' && false
+      if: ${{ needs.publish-standalone.result != 'success' }}
+
   quick-verify:
     strategy:
       matrix:
