@@ -19,7 +19,6 @@ ProgramLogic WeakestPrecondition
 ProgramLogic.Coercions
 Word.Interface OfListWord Separation SeparationLogic
 letexists
-BasicC64Semantics
 ListIndexNotations
 SepAutoArray
 symmetry
@@ -37,7 +36,6 @@ Local Open Scope string_scope.
 Local Open Scope list_scope.
 
 Import (notations) coqutil.Map.Memory.
-
 
 Definition p256_coord_nonzero := func! (p_x) ~> nz {
   unpack! nz = br_broadcast_nonzero(load(p_x) | load(p_x.+$8) | load(p_x.+$8.+$8) | load(p_x.+$8.+$8.+$8))
@@ -100,8 +98,10 @@ Definition p256_coord_add := func!(p_out, p_x, p_y) {
 Import String List bedrock2.ToCString Macros.WithBaseName.
 Local Open Scope string_scope. Local Open Scope list_scope.
 
+Require Import bedrock2Examples.shrd.
+
 Definition coord64 := &[,
- shrd.shrd;
+ shrd;
  p256_coord_add;
  p256_coord_sub;
  p256_coord_nonzero;
@@ -119,9 +119,12 @@ Local Ltac length_tac :=
     ?Nat.min_l
     by (trivial; lia); trivial; lia.
 
-Import BasicC64Semantics.
+Require Import bedrock2.BasicC64Semantics.
 
-Lemma fiat_coord_nonzero_ok : program_logic_goal_for_function! p256_coord_nonzero.
+Lemma fiat_coord_nonzero_ok :
+  (* This is one way to let the lemma know we are proving 64 bit stuff. Maybe there are others.*)
+  let spec := spec_of_p256_coord_nonzero (width:=64) (BW := Bitwidth64.BW64) in
+  program_logic_goal_for_function! p256_coord_nonzero.
 Proof.
   cbv [spec_of_p256_coord_nonzero];
   repeat straightline.
@@ -148,7 +151,7 @@ Proof.
 
   subst x1. f_equal. f_equal. apply Bool.eq_true_iff_eq.
   rewrite Z.eqb_eq, F.eqb_eq.
-  rewrite <-word.unsigned_of_Z_0, !word.unsigned_inj_iff by exact _.
+  rewrite <-(word.unsigned_of_Z_0 (width:=64)), !word.unsigned_inj_iff by exact _.
   rewrite !word.lor_0_iff, !word.zero_of_Z_iff, !Zdiv.Zmod_mod by exact _.
 
   rewrite coord.zero_iff; fold xR.
@@ -161,8 +164,12 @@ Proof.
   lia.
 Qed.
 
-Import shrd.
-Lemma u256_shr_ok : program_logic_goal_for_function! u256_shr.
+Existing Instance spec_of_shrd. (* This is a Definition so we explicitly make it known. *)
+
+Lemma u256_shr_ok :
+  (* This is one way to let the lemma know we are proving 64 bit stuff. Maybe there are others.*)
+  let spec := spec_of_u256_shr (width:=64) (BW := Bitwidth64.BW64) in
+  program_logic_goal_for_function! u256_shr.
 Proof.
   cbv [spec_of_u256_shr].
   straightline; repeat straightline_cleanup.
@@ -191,6 +198,7 @@ Proof.
   revert H14;
   eassert ((_ ++ _) = _) as ->; [|intros;ecancel_assumption].
   eapply le_combine_inj; rewrite ?app_length, ?length_le_combine, ?length_le_split; trivial.
+  Import LittleEndianList. (* Looks like I lost this override. *)
   rewrite !le_combine_app, !le_combine_split, ?length_le_split; change (2^(8%nat*8)) with (2^64).
   rewrite ?Z.mod_small by (cbv [p256] in *; ZnWords.ZnWords).
   subst y3; rewrite word.unsigned_sru_nowrap, Z.shiftr_div_pow2  by ZnWords.ZnWords.
@@ -218,11 +226,135 @@ Proof.
     all:f_equal; try lia.
 Qed.
 
+(* I think these should be word size agnostic, but it is hard to get my spec definitions here. reproving quickly,
+and then i will do the same with 32 bit and then generalize
+Require bedrock2Examples.full_sub bedrock2Examples.full_add. (* No Import because we dont want BasicC64Semantics.Width64 >:( )*)
+Local Existing Instances full_sub.spec_of_full_sub full_add.spec_of_full_add.
+*)
 
-Import full_sub full_add.
+(* TODO these can go into bedrock examples, or as general file into p256, but word size agnostic. *)
+Require Import coqutil.Macros.ident_to_string.
+
+Local Notation "x += e" :=
+  (cmd.set
+     (ident_to_string! x)
+     (expr.op bopname.add (ident_to_string! x) e))
+    (in custom bedrock_cmd at
+          level 0, x ident, e custom bedrock_expr, only parsing).
+
+Local Notation "x -= e" :=
+  (cmd.set
+     (ident_to_string! x)
+     (expr.op bopname.sub (ident_to_string! x) e))
+    (in custom bedrock_cmd at
+          level 0, x ident, e custom bedrock_expr, only parsing).
+
+(* This definition is inspired by `bn_sub_with_borrow` in BoringSSL,
+ * but has been rewritten in order to simplify its verification.  *)
+Definition br_full_sub :=
+  func! (x, y, borrow) ~> (diff, out_borrow) {
+      out_borrow = x < y;
+      diff = x - y;
+      out_borrow += diff < borrow;
+      diff -= borrow
+    }.
+
+#[export] Instance spec_of_full_sub : spec_of "br_full_sub" :=
+  fnspec! "br_full_sub" x y borrow ~> diff out_borrow,
+    { requires t m :=
+        (* This pre-condition is not required in order to ensure the
+         * post-condition, but formalizes on a condition on the
+         * operation's expected usage. *)
+        word.unsigned borrow < 2;
+      ensures T M :=
+        M = m /\ T = t /\
+          word.unsigned diff - 2^64 * word.unsigned out_borrow =
+            word.unsigned x - word.unsigned y - word.unsigned borrow
+    }.
+
+Require Import bedrock2.ZnWords.
+
+Lemma ltu_as_borrow :
+  forall a b : word,
+    word.unsigned a - word.unsigned b =
+      word.unsigned (word.sub a b) - 2^64 * (if word.ltu a b then 1 else 0).
+Proof.
+  intros.
+  rewrite word.unsigned_ltu.
+  destr (Z.ltb (word.unsigned a) (word.unsigned b)); ZnWords.
+Qed.
+
+Lemma full_sub_ok : program_logic_goal_for_function! br_full_sub.
+Proof.
+  repeat straightline.
+  rewrite ltu_as_borrow.
+  assert (subtrahends_comm: forall m n o, m - n - o = m - o - n) by lia.
+  rewrite subtrahends_comm. clear subtrahends_comm.
+  rewrite ltu_as_borrow.
+  repeat
+    (match goal with
+     | X := _ |- _  => subst X end).
+  destruct (word.ltu x y);
+    destruct (word.ltu (word.sub x y) borrow);
+    ZnWords.
+Qed.
+
+Definition br_full_add :=
+  func! (x, y, carry) ~> (sum, carry_out) {
+      x = x + carry;
+      carry_out = x < carry;
+      sum = x + y;
+      carry_out = carry_out + (sum < y)
+    }.
+
+Local Instance spec_of_full_add : spec_of "br_full_add" :=
+  fnspec! "br_full_add" x y carry ~> sum carry_out,
+    { (* The required upper bound on `carry` isn't necessary for the
+         current `br_full_add` to support the `ensures` clause, but
+         it does formalize an expected condition that future
+         implementations should be free to leverage. *)
+      requires t m := word.unsigned carry < 2;
+      ensures T M :=
+        M = m /\ T = t /\
+          word.unsigned sum + 2^64 * word.unsigned carry_out =
+            word.unsigned x + word.unsigned carry + word.unsigned y
+    }.
+
+Require Import coqutil.Tactics.Tactics.
+
+Lemma add_ltu_as_adder : forall a b : word,
+    word.unsigned a + word.unsigned b =
+      2^64 * (if word.ltu (word.add a b) b then 1 else 0) +
+          word.unsigned (word.add a b).
+Proof.
+  intros.
+  rewrite word.unsigned_ltu.
+  destr (Z.ltb (word.unsigned (word.add a b)) (word.unsigned b));
+    ZnWords.
+Qed.
+
+Require Import ZArith.
+
+Lemma full_add_ok : program_logic_goal_for_function! br_full_add.
+Proof.
+  repeat straightline.
+
+  rewrite add_ltu_as_adder.
+  rewrite <- Z.add_assoc.
+  rewrite add_ltu_as_adder.
+  repeat
+    (match goal with
+     | X := _ |- _  => subst X end).
+  destruct (word.ltu (word.add x'0 carry) carry);
+    destruct (word.ltu (word.add (word.add x'0 carry) y) y);
+    ZnWords.
+Qed.
+
+(* Why are we implementing the coord sub in the first place? I suspect it did not fall out of the pipeline branch?*)
 Local Existing Instances spec_of_full_sub spec_of_full_add.
 
-Import Specs.
+  Import LittleEndianList. (* Looks like I lost this override. *)
+  Import Specs. (* get the specs defi*)
 
 Lemma p256_coord_sub_nonmont_ok :
   let '_ := spec_of_p256_coord_sub_nonmont in
@@ -251,6 +383,7 @@ Proof.
   repeat (straightline || straightline_call); try ZnWords.ZnWords.
 
   cbv [Scalars.scalar Scalars.truncated_word Scalars.truncated_scalar] in H23.
+
   change (Memory.bytes_per access_size.word) with 8%nat in H23.
   repeat seprewrite_in_by (@Array.list_word_at_app_of_adjacent_eq) H23 ltac:(rewrite ?app_length, ?length_le_split, ?length_nil; try ZnWords.ZnWords).
   rewrite <-?app_assoc in H23.
@@ -272,7 +405,7 @@ Proof.
       (rewrite <-!word.unsigned_inj_iff; cbv [p256] in *; ZnWords.ZnWords).
   { rewrite ?Z.add_0_r in *; cbv [p256] in *. ZnWords.ZnWords. }
   rewrite <-(Z.mod_add _ 1), Z.mod_small by (cbv [p256] in *; ZnWords.ZnWords).
-  rewrite word.and_m1_l, ?word.unsigned_of_Z_nowrap in * by lia.
+  rewrite (Specs.and_m1_l (BW:=Bitwidth64.BW64)), ?word.unsigned_of_Z_nowrap in * by lia. (* TODO if I add a hint for BW, I should be fine. *)
   cbv [p256] in *; ZnWords.ZnWords.
 Qed.
 

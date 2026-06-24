@@ -1,4 +1,5 @@
-Require Import ZArith BinInt Lia Arith PeanoNat.
+Set Ltac Backtrace.
+Require Import ZArith BinInt Lia PeanoNat.
 Require Import Coq.Lists.List.
 Import ListNotations.
 
@@ -8,7 +9,6 @@ From coqutil Require Import
   Word.Properties
   Datatypes.List
   Tactics.Tactics.
-Require Import (notations) coqutil.Map.Memory.
 
 From bedrock2 Require Import
   Syntax
@@ -36,7 +36,7 @@ Require Import
   Curves.Weierstrass.AffineProofs
   Curves.Weierstrass.Jacobian.Jacobian
   Curves.Weierstrass.P256
-  Bedrock.P256.Specs.
+  Bedrock.P256.Specs. (* I think Specs is the culprit that still pulls in 64 bit words that may accidentally end up in places. *)
 Import Specs.coord Specs.point.
 
 Local Open Scope string_scope.
@@ -44,12 +44,6 @@ Local Open Scope Z_scope.
 Local Open Scope list_scope.
 
 #[local] Notation sizeof_point := 96%nat.
-
-(* TODO: Prove for both architectures by using a context. *)
-Require Import bedrock2.BasicC64Semantics.
-#[local] Notation width := 64%nat.
-
-Local Notation "p .+ n" := (word.add p (word.of_Z n)) (at level 50, format "p .+ n", left associativity).
 
 Definition p256_precompute_multiples := func! (p_table, p_P) {
   p256_point_set_zero(p_table);
@@ -102,7 +96,7 @@ Definition p256_select_point_from_table := func! (p_out, p_table, idx) {
 Definition p256_point_cmov := func! (p_out, c, p_z) {
   p256_coord_select_znz(p_out,       c, p_z,       p_out);
   p256_coord_select_znz(p_out + $32, c, p_z + $32, p_out + $32);
-  p256_coord_select_znz(p_out + $64, c, p_z + $64, p_out + $64)
+  p256_coord_select_znz(p_out + $32 + $32, c, p_z + $32 + $32, p_out + $32 + $32)
 }.
 
 Module W.
@@ -118,11 +112,6 @@ Lemma length_multiples (n : nat) (A : W.point) :
   Logic.eq (List.length (W.multiples n A)) n.
 Proof. cbv [W.multiples]. rewrite length_map, length_seq; trivial. Qed.
 
-#[local] Ltac solve_num_pre := repeat rewrite ?length_skipn, ?length_multiples, ?length_nil,
-  ?length_firstn, ?map_length, ?length_point, ?length_app, ?length_cons, ?length_coord in * by (lia || ZnWords).
-
-#[local] Ltac solve_num := solve_num_pre; (lia || ZnWords).
-
 Lemma multiples_nth (n : nat) (A : W.point):
   forall i : nat, i < n ->
   (List.nth_default (W.zero) (W.multiples n A) i) = W.mul i A.
@@ -131,6 +120,29 @@ Proof.
   erewrite ListUtil.map_nth_default with (x:=O) by (rewrite length_seq; lia).
   rewrite ListUtil.nth_default_seq_inbounds by lia; trivial.
 Qed.
+
+Require Import bedrock2.BasicCSemantics.
+
+(* Parameterize word size to ensure proofs are valid in 32 and 64 bit context.*)
+Section WithParameters.
+Context {width} {BW: Bitwidth.Bitwidth width}.
+#[local] Hint Extern 0 (word width) => exact (Naive.word width) : typeclass_instances.
+#[local] Notation word := (Naive.word width).
+
+Import Word.Interface.
+Import Map.Interface.
+Import Specs. (* Now word is accessible with short name. *)
+
+Import (notations) coqutil.Map.Memory.
+
+
+(* ZnWords with destructed word size equality after ZnWords_pre, to incorporate word size in hypothesis. *)
+#[local] Ltac ZnWords ::=
+  pose proof word_ok;
+  destruct Bitwidth.width_cases as [W|W]; symmetry in W; ZnWords_pre; try destruct W; better_lia.
+Unset Printing Coercions.
+
+Local Notation "p .+ n" := (word.add p (word.of_Z n)) (at level 50, format "p .+ n", left associativity).
 
 #[local] Notation pointarray := (array (fun (p : word.rep) (Q : point) =>
   sepclause_of_map ((to_bytes Q)$@p)) (word.of_Z (Z.of_nat sizeof_point))).
@@ -180,6 +192,16 @@ Qed.
       W.eq (to_affine out_point) (W.mul (word.signed k) (to_affine P))
   }.
 
+(* ZnWords with destructed word size equality after ZnWords_pre, to incorporate word size in hypothesis. *)
+#[local] Ltac ZnWords ::=
+  pose proof word_ok;  cbv [word] in *;
+  destruct Bitwidth.width_cases as [W|W]; symmetry in W; ZnWords_pre; try destruct W; better_lia.
+
+#[local] Ltac solve_num_pre := repeat rewrite ?length_skipn, ?length_multiples, ?length_nil,
+  ?length_firstn, ?map_length, ?length_point, ?length_app, ?length_cons, ?length_coord in * by (lia || ZnWords).
+
+#[local] Ltac solve_num := solve_num_pre; (lia || ZnWords).
+
 (* Matches up word additions in a simple equation. *)
 Ltac match_up_pointers :=
   match goal with |- eq ?A ?B =>
@@ -194,19 +216,20 @@ Lemma pointlist_firstn_nth_skipn (l : list point) (n : nat):
   l = (firstn n l) ++ [(nth_default (of_affine W.zero) l n)] ++ (skipn (S n) l).
 Proof. intros. rewrite nth_default_eq, firstn_nth_skipn; [reflexivity | solve_num]. Qed.
 
-Lemma pointarray_split_nth p (l : list point) (n : nat):
+(* No memory appearing in this lemma, so we have to help it to know which mem instance to use.*)
+Lemma pointarray_split_nth (p : word) (l : list point) (n : nat):
   n < length l ->
   Lift1Prop.iff1
-    (pointarray p l)
+    ((@array width _ _ mem _ (fun (p : word.rep) (Q : point) =>
+  sepclause_of_map ((to_bytes Q)$@p)) (word.of_Z (Z.of_nat sizeof_point))) p l)
     (pointarray p (firstn n l) *
       (sepclause_of_map ((to_bytes (nth_default (of_affine W.zero) l n))$@(p.+(sizeof_point * n)))) *
       (pointarray (p .+ (sizeof_point * (S n))) (skipn (S n) l)))%sep.
 Proof.
   intros. etransitivity.
   { eapply array_index_nat_inbounds with (n:=n). lia. }
-  rewrite <- hd_skipn_nth_default.
-  cancel.
-  Morphisms.f_equiv. do 3 f_equal. solve_num.
+  rewrite <- (hd_skipn_nth_default (of_affine W.zero)). cancel; cbv [seps].
+  do 2 Morphisms.f_equiv; [f_equal|]; ZnWords.
 Qed.
 
 #[local] Ltac hyp_containing a := match goal with H : context[a] |- _ => H end.
@@ -219,10 +242,10 @@ Proof.
   destruct out as (((?nz_x & ?nz_y) & ?nz_z) & ?).
   cbv [proj1_sig proj2_sig fst snd point.to_bytes] in * |-.
 
-  repeat (let H := hyp_containing m in seprewrite_in Array.sep_eq_of_list_word_at_app H;
+  repeat (let H := hyp_containing m in seprewrite_in @Array.sep_eq_of_list_word_at_app H;
     [reflexivity|solve_num|];
   rewrite ?length_coord in H).
-  bottom_up_simpl_in_hyps.
+  simpl Z.of_nat in *.
 
   straightline_call; ssplit; repeat straightline.
   2,3: eexists. 1-3: ecancel_assumption. 1: solve_num.
@@ -232,9 +255,9 @@ Proof.
   2,3: eexists. 1-3: ecancel_assumption. 1: solve_num.
 
   cbv [point.to_bytes fst snd proj1_sig].
-  repeat (seprewrite Array.sep_eq_of_list_word_at_app; [reflexivity|solve_num|]).
+  repeat (seprewrite @Array.sep_eq_of_list_word_at_app; [reflexivity|solve_num|]).
   rewrite !length_coord.
-  bottom_up_simpl_in_goal.
+  simpl Z.of_nat.
   destruct (Z.eqb_spec c1 0); ecancel_assumption.
 Qed.
 
@@ -274,7 +297,7 @@ Proof.
     ssplit; cycle -1.
     { rewrite Znat.Z2Nat.id; [exact eq_refl|ZnWords]. }
     { case Z.ltb_spec0; try (intros; ecancel_assumption).
-      subst i. bottom_up_simpl_in_goal; lia. }
+      subst i. intros; exfalso. ZnWords. }
     { ZnWords. }
     { ZnWords. }
     { trivial. }
@@ -331,7 +354,7 @@ Proof.
   assert (word.unsigned sign = if (word.signed k) <? 0 then (Z.ones width) else 0)
    as Hsign. {
     subst sign.
-    case word.lts_spec; rewrite word.signed_of_Z_nowrap by solve_num; intros;
+    case (word.lts_spec k (word.of_Z 0)); rewrite word.signed_of_Z_nowrap by solve_num; intros;
     case Z.ltb_spec; intros; try solve_num.
     { exact word.unsigned_broadcast_true. }
     { exact word.unsigned_broadcast_false. }
@@ -347,7 +370,20 @@ Proof.
   rename x into idx.
   let H := hyp_containing (eq (word.unsigned idx)) in rename H into Hidx.
 
-  repeat straightline.
+  (* straightline tries to solve the memory alignment with eq_refl:
+  | |- BinInt.Z.modulo ?z (Memory.bytes_per_word _) = BinInt.Z0 /\ _ =>
+      lazymatch Coq.setoid_ring.InitialRing.isZcst z with
+      | true => split; [exact eq_refl|]
+      end
+  That will not do, as we need to destruct over the width, maybe we can just override that clause.
+  *)
+  Local Ltac wstraightline := first [ProgramLogic.straightline | match goal with
+    | |- BinInt.Z.modulo ?z (Memory.bytes_per_word _) = BinInt.Z0 /\ _ =>
+      lazymatch Coq.setoid_ring.InitialRing.isZcst z with
+      | true => split; [destruct Bitwidth.width_cases as [W | W]; rewrite W; cbn; lia|]
+      end end].
+
+  repeat wstraightline. (* Works. continue here. *)
 
   let H := hyp_containing (@Forall2) in rename H into HForall.
 
@@ -368,11 +404,11 @@ Proof.
   destruct idxP as (((x & y) & z) & HidxP).
   cbv [point.to_bytes fst snd proj1_sig] in Pmem. subst Pmem.
 
-  repeat (let H := hyp_containing p_out in seprewrite_in Array.sep_eq_of_list_word_at_app H;
+  repeat (let H := hyp_containing p_out in seprewrite_in @Array.sep_eq_of_list_word_at_app H;
       [reflexivity|solve_num|]; rewrite ?length_coord in H).
-  bottom_up_simpl_in_hyps.
 
-  seprewrite_in_by array1_iff_eq_of_list_word_at ltac:(hyp_containing a) lia.
+  seprewrite_in_by @array1_iff_eq_of_list_word_at ltac:(hyp_containing a0) solve_num.
+  progress change (Z.of_nat 32) with 32 in *.
 
   straightline_call; ssplit.
   { ecancel_assumption. }
@@ -395,10 +431,8 @@ Proof.
 
   repeat straightline.
 
-  (* Dealloc of a. Prep ptsto and length so straightline processes. *)
-  Require Import coqutil.Macros.symmetry.
   pose proof (length_coord (F.opp y)).
-  seprewrite_in_by (symmetry! (Array.array1_iff_eq_of_list_word_at a)) ltac:(hyp_containing a) lia.
+  seprewrite_in_by (symmetry! (Array.array1_iff_eq_of_list_word_at a)) ltac:(hyp_containing a0) solve_num.
 
   repeat straightline.
 
@@ -410,18 +444,17 @@ Proof.
 
   { rewrite Hsign, Z.ones_equiv in *.
     cbv [point.to_bytes fst snd proj1_sig] in *; cbv [seps];
-    repeat (seprewrite Array.sep_eq_of_list_word_at_app;
+    repeat (seprewrite @Array.sep_eq_of_list_word_at_app;
         [reflexivity|solve_num|]; rewrite ?length_coord).
-    bottom_up_simpl_in_goal.
+    progress change (Z.of_nat 32) with 32 in *.
     use_sep_assumption.
-    cancel. case Z.ltb_spec; case Z.eqb_spec; try lia; intros; ecancel. }
+    cancel. case Z.ltb_spec; case Z.eqb_spec; intros; try (exfalso; solve_num); ecancel. }
 
   case Z.ltb_spec; intros.
   { rewrite <- (Z.opp_involutive (word.signed k)).
     rewrite ScalarMult.scalarmult_opp_l.
     match goal with H: W.eq _ ?v |- context [W.opp (?w)] =>
-      assert (W.eq v w) as <-; [repeat Morphisms.f_equiv; lia | rewrite <- H]
-    end.
+      assert (W.eq v w) as <- by (Morphisms.f_equiv; ZnWords); rewrite <- H end.
     rewrite <-Jacobian.to_affine_opp.
     cbv [Jacobian.opp proj1_sig].
     reflexivity. }
@@ -434,7 +467,7 @@ Proof.
   repeat straightline.
 
   seprewrite_in_by (Array.list_word_at_firstn_skipn p_table out sizeof_point) ltac:(hyp_containing (m)) solve_num.
-  bottom_up_simpl_in_hyps.
+  progress change (word.add ?p (word.of_Z (Z.of_nat 96))) with (word.add p (word.of_Z 96)) in *.
 
   straightline_call; ssplit; [ecancel_assumption|solve_num|].
 
@@ -470,10 +503,11 @@ Proof.
   { apply Nat.gt_wf. }
   { repeat straightline.
     eexists [(Jacobian.of_affine W.zero); P], _; ssplit.
-    { cbv [array]. bottom_up_simpl_in_goal. ecancel_assumption. }
+    { cbv [array]. simpl Z.of_nat in *. use_sep_assumption.
+      cancel. Morphisms.f_equiv. do 3 f_equal. ZnWords. }
     { ZnWords. }
     { ZnWords. }
-    { rewrite Znat.Z2Nat.id; [exact eq_refl|ZnWords]. }
+    { instantiate (1:=2%nat). ZnWords. }
     { listZnWords. }
     { repeat constructor. rewrite ScalarMult.scalarmult_1_l. reflexivity. }
   }
@@ -513,10 +547,14 @@ Proof.
   split; repeat straightline.
 
   (* i is odd -> addition. *)
-  { assert (3 <= word.unsigned i0). {
-      let H := unsigned.zify_expr v0 in try rewrite H in *; clear H.
-      ZnWords.
+  { let H := unsigned.zify_expr v0 in try rewrite H in *; clear H.
+    rewrite word.unsigned_of_Z_1 in *.
+    assert (2 <> i0). {
+      intros N. rewrite <- N in *.
+      let H := hyp_containing (Z.land 2 1) in apply H.
+      cbn. exact eq_refl.
     }
+    assert (3 <= i0) by lia.
 
     (* Length of multiples is v. *)
     match goal with H : _ |- _ =>
@@ -583,10 +621,12 @@ Proof.
     split; repeat ssplit; try trivial; lia.
   }
   (* i is even -> doubling. *)
-  { assert (word.unsigned (word.sru i0 (word.of_Z 1)) = (v / 2)%nat) as Idiv2. {
-      rewrite Znat.Nat2Z.inj_div. ZnWords.
+  { assert ((word.unsigned (width:=width) (word.of_Z 1)) = 1) as HofZ1 by ZnWords.
+    assert (word.unsigned (word.sru i0 (word.of_Z 1)) = (v / 2)%nat) as Idiv2. {
+      rewrite Znat.Nat2Z.inj_div.
+      rewrite word.unsigned_sru_nowrap by solve_num.
+      rewrite HofZ1. ZnWords.
     }
-    let H := unsigned.zify_expr v0 in rewrite H in *; clear H.
 
     (* Length of multiples is v. *)
     match goal with H : _ |- _ =>
@@ -594,9 +634,14 @@ Proof.
       pose proof Forall2_length H as Hl; rewrite ?length_map, ?length_multiples in Hl
     end.
 
+    assert ((v / 2)%nat < length multiples). {
+      rewrite Znat.Nat2Z.inj_div.
+      PreOmega.Z.to_euclidean_division_equations. lia.
+    }
+
     (* We need point (i/2)*P from the table. *)
     seprewrite_in_by (pointarray_split_nth p_table0 multiples (v / 2))
-                      ltac:(hyp_containing (p_table0)) solve_num.
+                      ltac:(hyp_containing m0) solve_num.
     set (vd2P := nth_default (Jacobian.of_affine W.zero) multiples (v / 2)) in *.
 
     straightline_call; ssplit.
@@ -629,9 +674,18 @@ Proof.
           solve_num.
         }
         rewrite <- ScalarMult.scalarmult_add_l.
-        Morphisms.f_equiv. solve_num.
+        Morphisms.f_equiv.
+
+        (* Now we need that v is even. *)
+        let H := unsigned.zify_expr v0 in try rewrite H in *; clear H.
+        rewrite HofZ1 in *.
+        replace (1) with (Z.ones 1) in * by (cbn; lia).
+        rewrite Z.land_ones in * by lia.
+        rewrite Znat.Nat2Z.inj_div.
+        PreOmega.Z.to_euclidean_division_equations. solve_num.
       }
       all: solve_num.
     }
   }
 Qed.
+End WithParameters.

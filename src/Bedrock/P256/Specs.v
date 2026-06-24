@@ -198,12 +198,21 @@ Local Open Scope Z_scope.
 Local Open Scope bool_scope.
 Import micromega.Lia Word.Properties.
 
-Section WithSemantics.
-Context {width} {BW : Bitwidth.Bitwidth width} {word : word.word width}.
-Context {locals : Interface.map.map string word}.
-Context {mem : Interface.map.map word byte}.
-Context {ext_spec : Semantics.ExtSpec}.
 
+Require coqutil.Word.Interface.
+Require coqutil.Map.Interface.
+Require coqutil.Word.Naive.
+Require coqutil.Map.SortedListWord.
+Require coqutil.Map.SortedListString.
+
+Require Import bedrock2.BasicCSemantics.
+
+Section WithSemantics.
+
+Import Word.Interface Map.Interface.
+Context {width} {BW: Bitwidth.Bitwidth width}.
+#[local] Hint Extern 0 (word width) => exact (Naive.word width) : typeclass_instances.
+#[local] Notation word := (Naive.word width).
 
 #[export] Instance spec_of_br_declassify : spec_of "br_declassify" :=
   fnspec! "br_declassify" a ~> a',
@@ -243,7 +252,7 @@ Context {ext_spec : Semantics.ExtSpec}.
 #[export] Instance spec_of_p256_point_set_zero : spec_of "p256_point_set_zero" :=
   fnspec! "p256_point_set_zero" p_out / out R,
   { requires t m := m =* out$@p_out * R /\ length out = 96%nat;
-    ensures t' m' := t' = t /\ m' =* (Jacobian.of_affine W.zero)$@p_out * R }.
+    ensures t' m' := t' = t /\ let out := (Jacobian.of_affine W.zero) in (out$@p_out * R)%sep m' }.
 
 #[export] Instance spec_of_p256_coord_opp : spec_of "p256_coord_opp" :=
   fnspec! "p256_coord_opp" p / (x : coord) R,
@@ -386,38 +395,35 @@ Definition spec_of_p256_coord_sub_nonmont : spec_of "p256_coord_sub" :=
       t' = t /\ m =* (le_split 32 r)$@p_out * R /\ (r = if b then F.opp (1/(1+1)) else F.zero)
   }.
 
-End WithSemantics.
+(* ZnWords with destructed word size equality after ZnWords_pre, to incorporate word size in hypothesis. *)
+#[local] Ltac ZnWords :=
+  pose proof word_ok; cbv [word] in *;
+  destruct Bitwidth.width_cases as [J|J]; symmetry in J; ZnWords.ZnWords_pre; try destruct J; ZnWords.better_lia.
 
-From bedrock2 Require Import BasicC64Semantics.
-From bedrock2Examples Require shrd full_sub full_add full_mul memmove memcpy.
-#[export] Existing Instance shrd.spec_of_shrd.
-#[export] Instance spec_of_memmove : spec_of "memmove". apply memmove.spec_of_memmove. Defined.
-#[export] Hint Mode Interface.map.map - - : typeclass_instances.
-#[export] Hint Mode word.word - : typeclass_instances.
-
-Goal spec_of "p256_coord_nonzero". exact _. all : fail. Abort.
-
-Module word.
-  Lemma signed_opp_nowrap (x : word) : word.signed x <> -2^63 -> word.signed (word.opp x) = - word.signed x.
+(* TODO I think I should move these into word Properties? *)
+Lemma signed_opp_nowrap (x : word) : word.signed x <> -2^(Z.pred width) -> word.signed (word.opp x) = - word.signed x.
   Proof.
     pose proof word.signed_range x.
     rewrite word.signed_opp.
     rewrite word.swrap_as_div_mod.
-    PreOmega.Z.div_mod_to_equations; lia.
+    ZnWords.
   Qed.
 
   Lemma nz_signed (x : word) : word.signed x <> 0 <-> word.unsigned x <> 0.
   Proof.
     rewrite word.signed_eq_swrap_unsigned.
     rewrite word.swrap_as_div_mod.
-    intuition ZnWords.ZnWords.
+    intuition ZnWords.
   Qed.
 
   Lemma and_m1_l (x : word) : word.and (word.opp (word.of_Z (1))) x = x.
   Proof.
     apply word.unsigned_inj.
-    rewrite word.unsigned_and_nowrap, word.unsigned_opp_nowrap, Z.sub_1_r, <-Z.ones_equiv.
-    2: { rewrite word.unsigned_of_Z_1; inversion 1. }
-    rewrite Z.land_comm, Z.land_ones, word.wrap_unsigned; trivial; blia.
+    rewrite word.unsigned_and_nowrap, word.unsigned_opp_nowrap by ZnWords.
+    rewrite word.unsigned_of_Z_1.
+    rewrite Z.sub_1_r, <-Z.ones_equiv.
+    rewrite Z.land_comm, Z.land_ones, word.wrap_unsigned; trivial.
+    ZnWords.
   Qed.
-End word.
+
+End WithSemantics.

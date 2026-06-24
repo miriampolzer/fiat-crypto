@@ -6,17 +6,18 @@ From Coq Require Import
 From coqutil Require Import
   Byte
   Datatypes.List
-  Word.LittleEndianList.
+  Word.LittleEndianList
+  Word.Interface.
 
 From bedrock2 Require Import
   NotationsCustomEntry
   WeakestPrecondition
   ProgramLogic
-  Syntax
-  BasicC64Semantics.
+  Syntax.
 
 From Crypto Require Import
   ListUtil
+  P256.Specs
   Util.ZUtil.
 
 Import ListNotations.
@@ -26,8 +27,17 @@ Import ProgramLogic.Coercions.
 #[local] Open Scope Z_scope.
 #[local] Open Scope list_scope.
 
-(* TODO replace with a context to verify both architectures. *)
-#[local] Notation width := 64.
+Require Import bedrock2.BasicCSemantics.
+
+(* Parameterize word size to ensure proofs are valid in 32 and 64 bit context.*)
+Section WithParameters.
+Context {width} {BW: Bitwidth.Bitwidth width}.
+#[local] Hint Extern 0 (word width) => exact (Naive.word width) : typeclass_instances.
+#[local] Notation word := (Naive.word width).
+
+Import Specs. (* Now word is accessible with short name. *)
+
+
 
 Definition ctime_ltu :=
   func! (a, b) ~> r {
@@ -200,3 +210,4 @@ End WithBase.
       positional_signed_bytes (2^w) LIMBS = positional_bytes (2^w) limbs /\
       Forall (fun b => (-2^w + 2 <= 2*(byte.signed b) <= 2^w)) LIMBS
   }.
+End WithParameters.

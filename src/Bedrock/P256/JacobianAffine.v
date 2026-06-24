@@ -5,6 +5,7 @@ Import Specs.NotationsCustomEntry Specs.coord Specs.point.
 Import Curves.Weierstrass.P256.
 
 Import bedrock2.Syntax bedrock2.NotationsCustomEntry
+bedrock2.ZnWords
 LittleEndianList
 Crypto.Util.ZUtil.Modulo Zdiv ZArith BinInt
 BinInt BinNat Init.Byte
@@ -18,14 +19,14 @@ ProgramLogic WeakestPrecondition
 ProgramLogic.Coercions
 Word.Interface OfListWord Separation SeparationLogic
 letexists
-BasicC64Semantics
 ListIndexNotations
 SepAutoArray
 symmetry
 PeanoNat micromega.Lia
 Tactics
 UniquePose
-micromega.Lia Word.Properties.
+micromega.Lia Word.Properties
+bedrock2.BasicCSemantics.
 
 Import Zbool. (*compat 8.20*)
 Import ListIndexNotations.
@@ -35,14 +36,30 @@ Local Open Scope bool_scope.
 Local Open Scope string_scope.
 Local Open Scope list_scope.
 
-Local Notation "xs $@ a" := (map.of_list_word_at a xs)
-  (at level 10, format "xs $@ a").
-Local Notation "$ n" := (match word.of_Z n return word with w => w end) (at level 9, format "$ n").
-Local Notation "p .+ n" := (word.add p (word.of_Z n)) (at level 50, format "p .+ n", left associativity).
-
+Import (notations) coqutil.Map.Memory.
 
 Import Coq.micromega.Lia.
 Import coqutil.Tactics.Tactics.
+
+Require Import bedrock2Examples.memcpy.
+
+(* Parameterize word size to ensure proofs are valid in 32 and 64 bit context.*)
+Section WithParameters.
+Context {width} {BW: Bitwidth.Bitwidth width}.
+#[local] Hint Extern 0 (word width) => exact (Naive.word width) : typeclass_instances.
+#[local] Notation word := (Naive.word width).
+
+Import Specs. (* Now word is accessible with short name. *)
+
+Local Notation "p .+ n" := (word.add p (word.of_Z n)) (at level 50, format "p .+ n", left associativity).
+Local Notation "$ n" := (match word.of_Z n return word with w => w end) (at level 9, format "$ n").
+
+(* Now how do we get the more generic functions in. *)
+
+(* ZnWords with destructed word size equality after ZnWords_pre, to incorporate word size in hypothesis. *)
+#[local] Ltac ZnWords ::=
+  pose proof word_ok;  cbv [word] in *;
+  destruct Bitwidth.width_cases as [W|W]; symmetry in W; ZnWords_pre; try destruct W; better_lia.
 
 
 Definition fe_set_1 := func! (o) {
@@ -89,8 +106,8 @@ Local Ltac length_tac_rewrites :=
     ?length_coord, ?length_point,
     ?app_length, ?firstn_length, ?skipn_length, ?length_le_split, ?length_nil,
     ?Nat.min_l in *
-    by (trivial; lia).
-Local Ltac length_tac := repeat straightline_cleanup;length_tac_rewrites; trivial; lia.
+    by (trivial; ZnWords).
+Local Ltac length_tac := repeat straightline_cleanup;length_tac_rewrites; trivial; ZnWords.
 
 Local Ltac clear_nongoal_sephyps :=
   repeat match reverse goal with
@@ -123,6 +140,7 @@ Local Ltac symex_call := (straightline_call; ssplit; [ solve [
       end
     ] ..  | repeat straightline_cleanup; straightline; repeat straightline_cleanup; clear_nonsymex_sephyps; repeat straightline]).
 
+
 Lemma p256_point_add_affine_nz_nz_neq_ok : program_logic_goal_for_function! p256_point_add_affine_nz_nz_neq.
 Proof.
   cbv [spec_of_p256_point_add_affine_nz_nz_neq of_affine].
@@ -133,10 +151,12 @@ Proof.
 
   rewrite <-(firstn_skipn 32 out) in Hm.
   rewrite <-(firstn_skipn 32 (skipn _ out)) in Hm.
-  progress repeat seprewrite_in_by Array.sep_eq_of_list_word_at_app Hm length_tac.
+  progress repeat seprewrite_in_by @Array.sep_eq_of_list_word_at_app Hm length_tac.
 
-  repeat straightline. clear_nonsymex_sephyps.
-  repeat seprewrite_in_by Array.array1_iff_eq_of_list_word_at Hm ltac:(Lia.lia).
+  repeat (repeat straightline; split; [cbv delta [Memory.bytes_per_word]; destruct Bitwidth.width_cases as [W | W]; rewrite W; cbv; lia |]).
+  repeat straightline.
+  clear_nonsymex_sephyps.
+  repeat seprewrite_in_by @Array.array1_iff_eq_of_list_word_at Hm ltac:(ZnWords).
   progress change (Z.of_nat 32) with 32 in *.
 
   symex_call.
@@ -163,11 +183,11 @@ Proof.
   clear_nongoal_sephyps.
 
   (* stackdealloc *)
-  progress repeat seprewrite_in_by (symmetry! @Array.array1_iff_eq_of_list_word_at) Hm ltac:(rewrite ?length_coord; Lia.lia).
+  progress repeat seprewrite_in_by (symmetry! @Array.array1_iff_eq_of_list_word_at) Hm ltac:(rewrite ?length_coord; ZnWords).
   progress repeat match type of Hm with context [Array.array ptsto _ _ (coord.to_bytes ?x)] =>
     unique pose proof (length_coord x) end.
   repeat straightline. clear_nongoal_sephyps.
-  progress repeat seprewrite_in_by (@Array.array1_iff_eq_of_list_word_at) Hm ltac:(rewrite ?length_coord; Lia.lia).
+  progress repeat seprewrite_in_by (@Array.array1_iff_eq_of_list_word_at) Hm ltac:(rewrite ?length_coord; ZnWords).
   length_tac_rewrites.
 
   (* postcondition *)
@@ -241,37 +261,45 @@ Proof.
   straightline_call; repeat straightline. (*iszero*)
   { letexists. ecancel_assumption. }
   straightline_call; repeat straightline. (*broadcast*)
+  repeat (repeat straightline; split; [cbv delta [Memory.bytes_per_word]; destruct Bitwidth.width_cases as [W | W]; rewrite W; cbv; lia |]).
+  repeat straightline.
   (* stackalloc *)
-  seprewrite_in_by (@Array.array1_iff_eq_of_list_word_at) Hm ltac:(lia).
+  seprewrite_in_by (@Array.array1_iff_eq_of_list_word_at) Hm ltac:(ZnWords).
   straightline_call; ssplit. (*add*)
   { ecancel_assumption. }
   { rewrite length_point; lia. }
   repeat straightline.
+  repeat (repeat straightline; split; [cbv delta [Memory.bytes_per_word]; destruct Bitwidth.width_cases as [W | W]; rewrite W; cbv; lia |]).
+  repeat straightline.
   straightline_call; repeat straightline (* br_declassify *).
+  repeat (repeat straightline; split; [cbv delta [Memory.bytes_per_word]; destruct Bitwidth.width_cases as [W | W]; rewrite W; cbv; lia |]).
+  repeat straightline.
   (* stackalloc *)
   clear_nonsymex_sephyps.
-  seprewrite_in_by (@Array.array1_iff_eq_of_list_word_at) Hm ltac:(lia).
+  seprewrite_in_by (@Array.array1_iff_eq_of_list_word_at) Hm ltac:(ZnWords).
   straightline_call; ssplit. (* memset *)
   { ecancel_assumption. }
   { ZnWords.ZnWords. }
   repeat straightline.
   straightline_call; repeat straightline; ssplit (* memcxor *).
   { ecancel_assumption. }
-  { rewrite ?repeat_length; trivial. }
-  { rewrite H17, length_point; trivial. }
+  { rewrite ?repeat_length; ZnWords. }
+  { rewrite H17, length_point; ZnWords. }
   straightline_call; repeat straightline; ssplit (* memcxor *).
   { ecancel_assumption. }
   { rewrite ?repeat_length; trivial. }
-  { rewrite length_point; trivial. }
+  { rewrite length_point; ZnWords. }
   straightline_call; repeat straightline; ssplit (* memcxor *).
   { ecancel_assumption. }
   { rewrite ?repeat_length; trivial. }
-  { rewrite length_point; trivial. }
+  { rewrite length_point; ZnWords. }
   clear_nonsymex_sephyps.
   progress rewrite ?word.unsigned_mul_nowrap, ?word.unsigned_of_Z_nowrap in * by ZnWords.ZnWords.
 
-assert (word__and_broadcast : forall a b, word.and (word.broadcast a) (word.broadcast b) = word.broadcast (andb a b)). {
-  clear; intros a b; case a, b; cbv [word.broadcast]; trivial.
+  (*TODO move somewhere else?*)
+assert (word__and_broadcast : forall a b, word.and (width:=width) (word.broadcast a) (word.broadcast b) = word.broadcast (andb a b)). {
+  clear -BW width; intros a b; case a, b; cbv [word.broadcast];
+  destruct Bitwidth.width_cases as [W|W]; symmetry in W; destruct W; trivial.
 }
 
   cbv [affine_point.iszero] in *; subst zeroQ.
@@ -281,9 +309,9 @@ assert (word__and_broadcast : forall a b, word.and (word.broadcast a) (word.broa
   letexists; ssplit; repeat straightline; subst v (* if ok *).
   { straightline_call; repeat straightline; ssplit (* memcpy *).
     { ecancel_assumption. }
-    { rewrite H10, length_point; trivial. }
-    { trivial. }
-    { clear; ZnWords.ZnWords. }
+    { rewrite H10, length_point; destruct Bitwidth.width_cases as [W|W]; symmetry in W; destruct W; trivial. }
+    { destruct Bitwidth.width_cases as [W|W]; symmetry in W; destruct W; trivial. }
+    { ZnWords.ZnWords. }
     clear_nongoal_sephyps.
     (* stackdealloc *)
     progress repeat seprewrite_in_by (symmetry! (Array.array1_iff_eq_of_list_word_at a)) Hm ltac:(length_tac_rewrites; listZnWords).
@@ -292,14 +320,15 @@ assert (word__and_broadcast : forall a b, word.and (word.broadcast a) (word.broa
     assert (Datatypes.length x2 = 96%nat) by (length_tac_rewrites; listZnWords).
     repeat straightline; clear_nongoal_sephyps.
 
-    rewrite <-word.unsigned_of_Z_0, !word.unsigned_inj_iff in H16 by exact _.
+    rewrite <-(word.unsigned_of_Z_0 (width:=width)), !word.unsigned_inj_iff in H16 by exact _.
     rewrite !word.lor_0_iff, !word.broadcast_0_iff in H16.
     destruct (iszero P) eqn:HP in *; (destruct (word.eqb_spec c2 (word.of_Z 0)) as [|HQ] in *; [subst c2|]);
       repeat (cbn [Z.eqb negb andb] in *; rewrite ?Z.eqb_refl in *; rewrite ?(proj2 (Z.eqb_neq _ _)) in * by ZnWords.ZnWords;
         match goal with
-           | H : word.broadcast false = word.of_Z 0 -> _ |- _ => specialize (H eq_refl)
-           | H : word.broadcast true = word.of_Z (-1) -> _ |- _ => specialize (H eq_refl)
-           end); subst; rewrite ?Byte.map_xor_0_l in * by (rewrite ?length_point; ZnWords.ZnWords).
+      | H : ?x = ?y -> _ |- _ => assert (x = y -> False) as _ by
+          (destruct Bitwidth.width_cases as [W|W]; symmetry in W; destruct W; inversion 1); clear H
+      | H : ?x = ?y -> _ |- _ => assert (x = y) as Heqxy by (destruct Bitwidth.width_cases as [W|W]; symmetry in W; destruct W; exact eq_refl); specialize (H Heqxy); clear Heqxy
+    end); subst; rewrite ?Byte.map_xor_0_l in * by (rewrite ?length_point; ZnWords.ZnWords).
     { (* 0 + 0 *)
       apply Decidable.dec_bool, Jacobian.iszero_iff in HP.
       eexists (exist _ (0,0,0)%F I); split.
@@ -316,7 +345,7 @@ assert (word__and_broadcast : forall a b, word.and (word.broadcast a) (word.broa
     { (* nz + nz' *)
       (* Decidable.dec_iff? *)
       cbv [iszero] in HP, HQ; case Decidable.dec in HP; try congruence.
-      destruct (H18 ltac:(trivial) ltac:(intros HX; specialize (H11 HX); congruence)) as [ [_ (?&HE)] |]; [|intuition fail].
+      destruct (H18 ltac:(trivial) ltac:(intros HX; specialize (H11 HX); congruence)) as [ [_ (?&HE)] |]; [|]. 2: { destruct Bitwidth.width_cases as [W|W]; symmetry in W; destruct W; intuition fail. }
       repeat straightline_cleanup.
       eexists; split; [ecancel_assumption|].
       rewrite Jacobian.eq_iff, Jacobian.to_affine_add, Jacobian.to_affine_add_inequal_nz_nz; trivial; [reflexivity|].
@@ -324,7 +353,7 @@ assert (word__and_broadcast : forall a b, word.and (word.broadcast a) (word.broa
       destruct Q as ([(?&?)|[]]&?); intuition idtac.
     } }
   { (* if !ok *)
-    rewrite <-word.unsigned_of_Z_0, word.unsigned_inj_iff in * by exact _.
+    rewrite <-(word.unsigned_of_Z_0 (width:=width)), word.unsigned_inj_iff in * by exact _.
     rewrite !word.lor_0_iff, !word.broadcast_0_iff in *.
     DestructHead.destruct_head' @and; subst.
     rewrite ?word.not_broadcast, ?word__and_broadcast, ?Bool.negb_involutive, ?word.broadcast_0_iff, ?Z.eqb_neq, ?word.unsigned_of_Z_0 in *.
@@ -333,9 +362,9 @@ assert (word__and_broadcast : forall a b, word.and (word.broadcast a) (word.broa
     { split. { ecancel_assumption. } { length_tac. } }
     straightline_call; repeat straightline; ssplit (* memcpy *).
     { ecancel_assumption. }
-    { rewrite H10, length_point; trivial. }
-    { trivial. }
-    { clear; ZnWords.ZnWords. }
+    { rewrite H10, length_point. destruct Bitwidth.width_cases as [W|W]; symmetry in W; destruct W; trivial. }
+    { destruct Bitwidth.width_cases as [W|W]; symmetry in W; destruct W; trivial. }
+    { ZnWords.ZnWords. }
     repeat straightline.
     (* stackdealloc *)
     clear_nongoal_sephyps.
@@ -386,3 +415,5 @@ Definition sc_sub := func!(out, x, y) {
   store(out+$16, x14);
   store(out+$24, x16)
 }.
+
+End WithParameters.

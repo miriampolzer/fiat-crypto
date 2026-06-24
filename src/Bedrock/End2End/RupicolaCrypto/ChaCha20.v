@@ -9,7 +9,7 @@ Import coqutil.Word.LittleEndianList (le_combine, le_split).
 Require Import Crypto.Arithmetic.PrimeFieldTheorems.
 Require Import Crypto.Bedrock.Specs.Field.
 Require Import Crypto.Bedrock.Field.Interface.Compilation2.
-Require coqutil.Word.Naive.
+Require Import coqutil.Word.Naive.
 Require Import bedrock2.FE310CSemantics.
 Require Import coqutil.Map.SortedListWord.
 Import Syntax.Coercions ProgramLogic.Coercions.
@@ -19,7 +19,9 @@ Import Lists.List.
 Import Loops.
 Import LoopCompiler.
 
-Notation word := (Naive.word 32).
+#[local] Hint Extern 0 (Interface.word _) => exact (Naive.word 32%Z) : typeclass_instances.
+#[local] Hint Extern 0 (word.ok _) => exact word32_ok : typeclass_instances. (* TODO apparently the one from naive doesnt get used here, because it tries to resolve work.ok before resolving the word instance...it's interestingly weird that I have not seen this issue anywhere else. *)
+Notation word := (Naive.word 32%Z).
 Notation locals := (FE310CSemantics.locals (word:=word)).
 Notation mem :=(@SortedListWord.map 32 (Naive.word 32) Naive.word32_ok Init.Byte.byte).
 Notation predicate := (predicate (word:=word) (locals:=locals) (mem:=mem)).
@@ -279,9 +281,10 @@ Definition quarter_gallina a b c d : \<< word, word, word, word \>> :=
   let/n c := c + d in  let/n b := b ^ c in  let/n b := b <<< word.of_Z 7 in
                                             \< a, b, c, d \>.
 
-Hint Rewrite word.Z_land_ones_rotate using (split; reflexivity) : quarter.
-Hint Rewrite <- word.unsigned_xor_nowrap : quarter.
-Hint Rewrite word.Z_land_ones_word_add : quarter.
+(* TODO I suspect we need these now because of word.Naive changes, they probably had random word instances before. did they even work?*)
+Hint Rewrite (word.Z_land_ones_rotate (word := word)) using (split; reflexivity) : quarter.
+Hint Rewrite <- (word.unsigned_xor_nowrap (word := word)) : quarter.
+Hint Rewrite (word.Z_land_ones_word_add (word:=word)) : quarter.
 
 Lemma quarter_ok0 a b c d:
   Spec.quarter (word.unsigned a, word.unsigned b, word.unsigned c, word.unsigned d) =

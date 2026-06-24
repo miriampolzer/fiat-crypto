@@ -3,7 +3,7 @@ Require Import Curves.Weierstrass.P256.
 Require Import Bedrock.P256.Specs.
 Require Import Bedrock.P256.Platform.
 Import bedrock2.NotationsCustomEntry Specs.NotationsCustomEntry.
-Import bedrock2Examples.shrd.
+Require Import bedrock2Examples.shrd.
 
 Definition p256_coord_nonzero := func! (p_x) ~> nz {
   nz = load(p_x) | load(p_x.+$4) | load(p_x.+$4.+$4) | load(p_x.+$4.+$4.+$4);
@@ -86,6 +86,8 @@ Definition u256_set_p256_minushalf_conditional := func!(p_out, mask) {
 Import String List bedrock2.ToCString Macros.WithBaseName.
 Local Open Scope string_scope. Local Open Scope list_scope.
 
+Require Import bedrock2Examples.shrd.
+
 Definition coord32 := &[,
  shrd;
  p256_coord_nonzero;
@@ -94,9 +96,8 @@ Definition coord32 := &[,
  ].
 
 From Coq Require Import String List.
-Compute String.concat LF (List.map (fun f => "static inline "++ c_func f) coord32)%string.
-
-From bedrock2 Require Import BasicC32Semantics.
+(* Uncomment to print functions. *)
+(* Compute String.concat LF (List.map (fun f => "static inline "++ c_func f) coord32)%string.*)
 
 Import bedrock2.Syntax bedrock2.NotationsCustomEntry
 LittleEndianList
@@ -139,8 +140,12 @@ Local Ltac length_tac :=
     ?Nat.min_l
     by (trivial; lia); trivial; lia.
 
+Require Import bedrock2.BasicC32Semantics.
 
-Lemma fiat_coord_nonzero_ok : program_logic_goal_for_function! p256_coord_nonzero.
+Lemma fiat_coord_nonzero_ok :
+  (* This is one way to let the lemma know we are proving 64 bit stuff. Hopefully this becomes nicer with correct hints. *)
+  let spec := spec_of_p256_coord_nonzero (width:=32) (BW := Bitwidth32.BW32) in
+  program_logic_goal_for_function! p256_coord_nonzero.
 Proof.
   cbv [spec_of_p256_coord_nonzero];
   repeat straightline.
@@ -167,7 +172,7 @@ Proof.
 
   subst x1. f_equal. f_equal. apply Bool.eq_true_iff_eq.
   rewrite Z.eqb_eq, F.eqb_eq.
-  rewrite <-word.unsigned_of_Z_0, !word.unsigned_inj_iff by exact _.
+  rewrite <-(word.unsigned_of_Z_0 (width:=32)), !word.unsigned_inj_iff by exact _.
   subst nz nz'0 nz'1 nz'2 v.
   rewrite !word.lor_0_iff, !word.zero_of_Z_iff, !Zdiv.Zmod_mod by exact _.
 
@@ -181,8 +186,12 @@ Proof.
   lia.
 Qed.
 
-Import shrd.
-Lemma u256_shr_ok : program_logic_goal_for_function! u256_shr.
+Existing Instance spec_of_shrd. (* This is a Definition so we explicitly make it known. *)
+
+Lemma u256_shr_ok :
+  (* This is one way to let the lemma know we are proving 64 bit stuff. Maybe there are others.*)
+  let spec := spec_of_u256_shr (width:=32) (BW := Bitwidth32.BW32) in
+  program_logic_goal_for_function! u256_shr.
 Proof.
   cbv [spec_of_u256_shr].
   straightline.

@@ -2,6 +2,7 @@ Require Import ZArith.ZArith Lia Lists.List.
 From coqutil Require Import
   Byte
   Word.LittleEndianList
+  Word.Interface
   Word.Properties
   Tactics.Tactics
   Datatypes.List.
@@ -14,8 +15,7 @@ From bedrock2 Require Import
   Array
   Scalars
   Syntax
-  ZnWords
-  BasicC64Semantics.
+  ZnWords.
 
 Require Import Bedrock.P256.Specs Bedrock.P256.RecodeSpecs.
 From bedrock2Examples Require Import full_sub.
@@ -27,13 +27,96 @@ Import ProgramLogic.Coercions.
 #[local] Open Scope Z_scope.
 #[local] Open Scope list_scope.
 
+(* Parameterize word size to ensure proofs are valid in 32 and 64 bit context.*)
+Require Import bedrock2.BasicCSemantics.
+Section WithParameters.
+Context {width} {BW: Bitwidth.Bitwidth width}.
+#[local] Hint Extern 0 (word width) => exact (Naive.word width) : typeclass_instances.
+#[local] Notation word := (Naive.word width).
+
+Import Specs. (* Now word is accessible with short name. *)
+
+Local Notation "p .+ n" := (word.add p (word.of_Z n)) (at level 50, format "p .+ n", left associativity).
+Local Notation "$ n" := (match word.of_Z n return word (width:=width) with w => w end) (at level 9, format "$ n").
+
+(* ZnWords with destructed word size equality after ZnWords_pre, to incorporate word size in hypothesis. *)
+#[local] Ltac ZnWords ::=
+  pose proof word_ok;  cbv [word] in *;
+  destruct Bitwidth.width_cases as [W|W]; symmetry in W; ZnWords_pre; try destruct W; better_lia.
+
 #[local] Notation bytearray := (Array.array ptsto (word.of_Z 1)).
 
 (* Limb size (nonzero). *)
 #[local] Notation w := 5.
 
+(* TODO these can go into bedrock examples, or as general file into p256, but word size agnostic. *)
+Require Import coqutil.Macros.ident_to_string.
+
+Local Notation "x += e" :=
+  (cmd.set
+     (ident_to_string! x)
+     (expr.op bopname.add (ident_to_string! x) e))
+    (in custom bedrock_cmd at
+          level 0, x ident, e custom bedrock_expr, only parsing).
+
+Local Notation "x -= e" :=
+  (cmd.set
+     (ident_to_string! x)
+     (expr.op bopname.sub (ident_to_string! x) e))
+    (in custom bedrock_cmd at
+          level 0, x ident, e custom bedrock_expr, only parsing).
+
+(* This definition is inspired by `bn_sub_with_borrow` in BoringSSL,
+ * but has been rewritten in order to simplify its verification.  *)
+Definition br_full_sub :=
+  func! (x, y, borrow) ~> (diff, out_borrow) {
+      out_borrow = x < y;
+      diff = x - y;
+      out_borrow += diff < borrow;
+      diff -= borrow
+    }.
+
+#[export] Instance spec_of_full_sub : spec_of "br_full_sub" :=
+  fnspec! "br_full_sub" x y borrow ~> diff out_borrow,
+    { requires t m :=
+        (* This pre-condition is not required in order to ensure the
+         * post-condition, but formalizes on a condition on the
+         * operation's expected usage. *)
+        word.unsigned borrow < 2;
+      ensures T M :=
+        M = m /\ T = t /\
+          word.unsigned diff - 2^width * word.unsigned out_borrow =
+            word.unsigned x - word.unsigned y - word.unsigned borrow
+    }.
+
+    Lemma ltu_as_borrow :
+  forall a b : (Specs.word (width:=width)),
+    word.unsigned a - word.unsigned b =
+      word.unsigned (word.sub a b) - 2^width * (if word.ltu a b then 1 else 0).
+Proof.
+  intros.
+  rewrite word.unsigned_ltu.
+  destr (Z.ltb (word.unsigned a) (word.unsigned b)); ZnWords.
+Qed.
+
+Lemma full_sub_ok : program_logic_goal_for_function! br_full_sub.
+Proof.
+  repeat straightline.
+  rewrite ltu_as_borrow.
+  assert (subtrahends_comm: forall m n o, m - n - o = m - o - n) by lia.
+  rewrite subtrahends_comm. clear subtrahends_comm.
+  rewrite ltu_as_borrow.
+  repeat
+    (match goal with
+     | X := _ |- _  => subst X end).
+  destruct (word.ltu x y);
+    destruct (word.ltu (word.sub x y) borrow); ZnWords.
+Qed.
+
+
 Lemma ctime_ltu_ok : program_logic_goal_for_function! ctime_ltu.
 Proof.
+  cbv [spec_of_ctime_ltu].
   repeat straightline.
   straightline_call.
   { ZnWords. }
@@ -41,14 +124,14 @@ Proof.
   straightline_call.
   { trivial. }
   repeat straightline.
-  case word.ltu_spec; split; ZnWords.
+  case (word.ltu_spec (width:=width)); split; ZnWords.
 Qed.
 
 Lemma bytearray_load_of_sep addr (addr' : word) n (values : list byte) R m
   (Hsep : (sep (bytearray addr values) R m))
   (Haddr : addr' = (word.add addr (word.of_Z (Z.of_nat n))))
   (Hlength : (n < length values)) :
-  Memory.load access_size.one m addr' =
+  Memory.load (mem:=mem) access_size.one m addr' =
   Some (word.of_Z (byte.unsigned (nth_default Byte.x00 values n))).
 Proof.
   rewrite nth_default_eq.
@@ -61,11 +144,18 @@ Proof.
   ecancel_assumption.
 Qed.
 
+(* TODO make global/ export in the right place? or fix in specs, i think the one i declared there may be broken.*)
+Add Ring wring : (Properties.word.ring_theory (width := width))
+      (preprocess [autorewrite with rew_word_morphism],
+       morphism (Properties.word.ring_morph (width := width)),
+       constants [Properties.word_cst]).
+
+
 Lemma bytearray_load_of_sep' (addr addr': word) (values : list byte) R m :
   (sep (bytearray addr values) R m) ->
   let offset := word.unsigned (word.sub addr' addr) in
     (let n := Z.to_nat offset in (n < length values) ->
-    Memory.load access_size.one m addr' =
+    Memory.load (mem:=mem) access_size.one m addr' =
     Some (word.of_Z (byte.unsigned (nth_default Byte.x00 values n)))).
 Proof.
   intros.
@@ -82,13 +172,13 @@ Lemma extract_limb_at_bit_zify a b i :
   word.unsigned (word.and
     (word.sru (word.or (word.of_Z a) (word.slu (word.of_Z b) (word.of_Z 8))) (word.and i (word.of_Z 7)))
     (word.sub (word.slu (word.of_Z 1) (word.of_Z w)) (word.of_Z 1))) =
-  Z.land ((Z.shiftr (Z.lor a (Z.shiftl b 8)) (Z.land (word.unsigned i) (Z.ones 3)))) (Z.ones w).
+  Z.land ((Z.shiftr (Z.lor a (Z.shiftl b 8)) (Z.land (word.unsigned (width:=width) i) (Z.ones 3)))) (Z.ones w).
 Proof.
   intros. pose proof Naive.word64_ok.
   assert ((word.wrap (Z.shiftl 1 5) - 1) = Z.ones 5) as H5 by (cbn; trivial).
   repeat rewrite ?word.unsigned_sru_nowrap, ?word.unsigned_and_nowrap, ?word.unsigned_of_Z_nowrap,
     ?word.unsigned_or_nowrap, ?word.unsigned_slu, ?word.unsigned_sub_nowrap, ?H5;
-      try (cbn; lia).
+      try (cbn; ZnWords).
   2: change (7) with (Z.ones 3); rewrite Z.land_ones by lia; ZnWords.
   repeat f_equal; try ZnWords.
 Qed.
@@ -146,6 +236,7 @@ Qed.
 
 Lemma extract_limb_at_bit_ok : program_logic_goal_for_function! extract_limb_at_bit.
 Proof.
+  cbv [spec_of_extract_limb_at_bit].
   repeat (straightline || apply WeakestPreconditionProperties.dexpr_expr).
   (* First byte load. *)
   eexists _.
@@ -162,10 +253,10 @@ Proof.
     split.
     { eapply bytearray_load_of_sep'; eauto.
       revert cond.
-      case word.ltu_spec; intros; ZnWords. }
+      case (word.ltu_spec (width:=width)); intros; ZnWords. }
     repeat straightline.
     subst r t s v b.
-    revert cond; case word.ltu_spec; intros; [|ZnWords].
+    revert cond; case (word.ltu_spec (width:=width)); intros; [|ZnWords].
 
     rewrite extract_limb_at_bit_zify by apply byte.unsigned_range.
 
@@ -173,7 +264,7 @@ Proof.
     all: repeat f_equal; ZnWords.
   }
   subst r t s b.
-  revert cond; case word.ltu_spec; intros cond ?; [ZnWords|].
+  revert cond; case (word.ltu_spec (width:=width)); intros cond ?; [ZnWords|].
 
   rewrite extract_limb_at_bit_zify by (try apply byte.unsigned_range; lia).
 
@@ -188,6 +279,7 @@ Qed.
 
 Lemma decompose_to_limbs_ok : program_logic_goal_for_function! decompose_to_limbs.
 Proof.
+  cbv [spec_of_decompose_to_limbs].
   repeat straightline.
   refine ((Loops.tailrec
     (* types of ghost variables*) (HList.polymorphic_list.cons _
@@ -201,7 +293,7 @@ Proof.
       8 * (length input - 1) < total_bits <= 8 * length input /\
       w * (length output - 1) < total_bits - i <= w * length output /\
       le_combine input < 2^total_bits /\
-      total_bits + w <= (word.of_Z (-1) : word))
+      total_bits + w <= $(-1))
     (fun            T M P_OUTPUT P_INPUT TOTAL_BITS I => (* postcondition *)
       exists OUTPUT,
       M =* bytearray p_output OUTPUT * bytearray p_input input * R /\
@@ -217,7 +309,7 @@ Proof.
   { repeat straightline. }
   { eapply Z.gt_wf. }
   { repeat straightline.
-    ssplit; try ecancel_assumption; try ZnWords. }
+    ssplit; try ecancel_assumption; ZnWords. }
   { intros v output_ R_ t_ m_ p_output_ p_input_ total_bits_ i_.
     repeat straightline; subst br.
     { destruct (word.ltu_spec i_ total_bits);
@@ -283,6 +375,7 @@ Qed.
 
 Lemma signed_recode_carry_ok : program_logic_goal_for_function! signed_recode_carry.
 Proof.
+  cbv [spec_of_signed_recode_carry].
   repeat straightline.
   refine ((Loops.tailrec
     (* types of ghost variables*) (HList.polymorphic_list.cons _
@@ -331,7 +424,7 @@ Proof.
             rewrite List.length_cons in *;
             try ZnWords. }
           { match goal with H: Forall _ _ |- _ => inversion H end; trivial. }
-          all: subst x; case word.ltu_spec; ZnWords. }
+          all: subst x; case (word.ltu_spec (width:=width)); ZnWords. }
         { split.
           { lia. }
           { repeat straightline.
@@ -356,7 +449,7 @@ Proof.
 
               cbv [x0 x v0 byte.signed].
               match goal with | H: Forall _ (_ :: _) |- _ => apply Forall_inv in H end.
-              case word.ltu_spec; case Z.eqb_spec; [ZnWords | | | ZnWords];
+              case (word.ltu_spec (width:=width)); case Z.eqb_spec; [ZnWords | | | ZnWords];
               repeat rewrite ?word.unsigned_of_Z_0, ?word.unsigned_of_Z_0, ?word.unsigned_sub_nowrap,
                 ?word.unsigned_sub, ?word.unsigned_add_nowrap, ?byte.unsigned_of_Z, ?byte.swrap_wrap by ZnWords; intros.
               { rewrite word.byte_swrap_word_wrap by ZnWords.
@@ -366,11 +459,11 @@ Proof.
             { constructor.
               { cbv [x0 x v0].
                 match goal with | H: Forall _ (_ :: _) |- _ => apply Forall_inv in H end.
-                case word.ltu_spec; case Z.eqb_spec;
+                case (word.ltu_spec (width:=width)); case Z.eqb_spec;
                 repeat rewrite ?word.unsigned_of_Z_0, ?word.unsigned_of_Z_0, ?word.unsigned_sub_nowrap,
                 ?word.unsigned_add_nowrap, ?word.unsigned_sub, ?word.unsigned_of_Z_nowrap by ZnWords;
                 intros; try ZnWords; unfold byte.signed; rewrite byte.unsigned_of_Z, byte.swrap_wrap;
-                rewrite ?word.byte_swrap_word_wrap by lia;
+                rewrite ?word.byte_swrap_word_wrap by ZnWords;
                 cbv [byte.swrap]; rewrite Z.mod_small; try ZnWords. }
                 assumption. }
             all: lia. } } } }
@@ -407,6 +500,7 @@ Qed.
 
 Lemma signed_recode_ok : program_logic_goal_for_function! signed_recode.
 Proof.
+  cbv [spec_of_signed_recode].
   repeat straightline.
   straightline_call. (* call signed_recode_carry *)
   { ssplit; try ecancel_assumption; trivial; ZnWords. }
@@ -426,3 +520,5 @@ Proof.
     lia. }
   ZnWords.
 Qed.
+
+End WithParameters.

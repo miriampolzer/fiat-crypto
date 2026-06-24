@@ -355,7 +355,7 @@ Proof.
     right. left. ssplit; trivial; []. eexists. ssplit; try eassumption. right. left.
     rewrite app_nth2 by ZnWords.
     rewrite !app_comm_cons.
-    rewrite app_nth2 by SepAutoArray.listZnWords.
+    rewrite !app_nth2 by SepAutoArray.listZnWords.
     match goal with |- context[nth ?x] => replace x with O by SepAutoArray.listZnWords end.
     cbn. intro. subst. apply E1. reflexivity. }
 

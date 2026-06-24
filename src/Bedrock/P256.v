@@ -17,7 +17,6 @@ ProgramLogic WeakestPrecondition
 ProgramLogic.Coercions
 Word.Interface OfListWord Separation SeparationLogic
 letexists
-BasicC64Semantics
 ListIndexNotations
 SepAutoArray
 symmetry
@@ -43,14 +42,8 @@ Import bedrock2.ToCString.
 Import Macros.WithBaseName.
 Import String List. Local Open Scope string_scope. Local Open Scope list_scope.
 
-
-Axiom p256_coord_sqr : Syntax.func.
-Axiom p256_coord_sqr_ok : forall functions, map.get functions "p256_coord_sqr" = Some p256_coord_sqr -> spec_of_p256_coord_sqr functions.
-
-Axiom p256_coord_mul : Syntax.func.
-Axiom p256_coord_mul_ok : forall functions, map.get functions "p256_coord_mul" = Some p256_coord_mul -> spec_of_p256_coord_mul functions.
-
-Import memcpy shrd full_sub full_add full_mul memmove.
+Import memcpy shrd memmove.
+From bedrock2Examples Require Import full_mul.
 
 Definition platform := &[,
   br_full_add; br_full_sub; br_full_mul; shrd;
@@ -61,7 +54,7 @@ Definition libc := &[, memmove; br_memcpy;  br_memset].
 
 Local Definition c_func f : string := "static inline "++ c_func f.
 
-Compute String.concat LF (List.map c_func platform).
+(* Compute String.concat LF (List.map c_func platform). *)
 
 Definition jacobian := &[,
  br_broadcast_odd;
@@ -79,7 +72,7 @@ Definition jacobian := &[,
  p256_precompute_multiples
  ].
 
-Compute String.concat LF (List.map c_func jacobian).
+(* Compute String.concat LF (List.map c_func jacobian). *)
 
  (*
  p256_point_add_affine_nz_nz_neq;
@@ -90,10 +83,23 @@ Compute String.concat LF (List.map c_func jacobian).
  fe_set_1;
   *)
 
+
+(* 64 bit functions correctness. *)
+Section Bitwidth64.
+
+Import Bitwidth64.
+
+Axiom p256_coord_sqr : Syntax.func.
+Axiom p256_coord_sqr_ok: forall functions, map.get functions "p256_coord_sqr" = Some p256_coord_sqr -> spec_of_p256_coord_sqr functions.
+
+Axiom p256_coord_mul : Syntax.func.
+Axiom p256_coord_mul_ok : forall functions, map.get functions "p256_coord_mul" = Some p256_coord_mul -> spec_of_p256_coord_mul functions.
+
 Definition asm := &[, p256_coord_sqr; p256_coord_mul
  ].
 
-Definition funcs := Eval cbv [List.app] in (jacobian ++ coord64 ++ asm ++ platform ++ libc)%list.
+
+Definition funcs64 := Eval cbv [List.app] in (jacobian ++ coord64 ++ asm ++ platform ++ libc)%list.
 
 Ltac pose_correctness lem :=
   let funcs := match goal with |- _ (map.of_list ?funcs) => funcs end in
@@ -110,7 +116,7 @@ Ltac pose_correctness lem :=
 Local Existing Instance memmove.spec_of_memmove.
 #[export] Instance spec_of_memmove : spec_of "memmove". apply memmove.spec_of_memmove. Defined.
 
-Lemma link_jacobian  : spec_of_p256_point_add_vartime_if_doubling (map.of_list funcs).
+Lemma link_jacobian  : spec_of_p256_point_add_vartime_if_doubling (map.of_list funcs64).
 Proof.
   pose_correctness full_add_ok.
   pose_correctness full_sub_ok.
@@ -124,7 +130,7 @@ Proof.
 
   pose_correctness memmove.memmove_ok.
   match goal with H : _ |- _ =>
-  pose proof br_memcpy_ok (map.of_list funcs) eq_refl H end.
+  pose proof br_memcpy_ok (map.of_list funcs64) eq_refl H end.
   pose_correctness br_memset_ok.
   pose_correctness br_memcxor_ok.
 
@@ -158,3 +164,7 @@ Proof.
 Qed.
 
 Print Assumptions link_jacobian.
+
+End Bitwidth64.
+
+(* TODO link together all functions for 32 bit to ensure we are using the right specs in the right places. *)
